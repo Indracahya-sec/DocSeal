@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Login - DocSeal On-Premise</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 10px; width: 360px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid #334155; }
+        h2 { margin-top: 0; color: #38bdf8; text-align: center; }
+        p.sub { font-size: 0.85rem; color: #94a3b8; text-align: center; margin-bottom: 1.5rem; }
+        label { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
+        input { width: 100%; padding: 0.65rem; margin-bottom: 1rem; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; }
+        button { width: 100%; padding: 0.75rem; background: #0284c7; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        button:hover { background: #0369a1; }
+        .alert { padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; background: #7f1d1d; color: #fecaca; }
+        .roles-hint { margin-top: 1.2rem; font-size: 0.78rem; color: #94a3b8; background: #0f172a; padding: 0.75rem; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>DocSeal</h2>
+        <p class="sub">Sistem Integritas & Proteksi Dokumen Digital<br>(Simulasi On-Premise - Data Dummy)</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}
+            <div class="alert">{{ message }}</div>
+          {% endfor %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <label>Username</label>
+            <input type="text" name="username" required placeholder="admin / operator / staf / auditor">
+            <label>Password</label>
+            <input type="password" name="password" required placeholder="••••••••">
+            <button type="submit">Masuk ke Sistem</button>
+        </form>
+
+        <div class="roles-hint">
+            <strong>Akun Simulasi RBAC:</strong><br>
+            • <code>admin</code> / <code>admin123</code> (Full Akses)<br>
+            • <code>operator</code> / <code>operator123</code> (Upload, Verify, Encrypt)<br>
+            • <code>staf</code> / <code>staf123</code> (Hanya Verify)<br>
+            • <code>auditor</code> / <code>auditor123</code> (Verify & Audit Log)
+        </div>
+    </div>
+</body>
+</html>

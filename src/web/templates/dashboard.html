@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - DocSeal</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 0; }
+        header { background: #1e293b; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
+        .badge-role { background: #0284c7; padding: 0.25rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; text-transform: uppercase; }
+        .container { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1.2rem; margin-bottom: 1.5rem; }
+        .card { background: #1e293b; padding: 1.25rem; border-radius: 8px; border: 1px solid #334155; margin-bottom: 1.5rem; }
+        h3 { margin-top: 0; color: #38bdf8; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+        label { display: block; font-size: 0.85rem; margin-bottom: 0.3rem; color: #cbd5e1; }
+        input, select { width: 100%; padding: 0.55rem; margin-bottom: 0.8rem; border-radius: 5px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; }
+        button { padding: 0.6rem 1rem; background: #0284c7; color: #fff; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; }
+        button.btn-enc { background: #7c3aed; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th, td { padding: 0.65rem; text-align: left; border-bottom: 1px solid #334155; }
+        th { background: #0f172a; color: #94a3b8; }
+        code { font-family: monospace; background: #0f172a; padding: 0.2rem 0.4rem; border-radius: 4px; color: #38bdf8; }
+        .valid-box { background: #064e3b; border: 2px solid #10b981; color: #ecfdf5; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
+        .mod-box { background: #7f1d1d; border: 2px solid #ef4444; color: #fef2f2; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
+        .flash { padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 1rem; background: #1e3a8a; border-left: 4px solid #38bdf8; }
+        a.logout { color: #f87171; text-decoration: none; font-weight: bold; margin-left: 1rem; }
+        a.dl-link { color: #a78bfa; text-decoration: none; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <strong>DocSeal</strong> | Proteksi & Verifikasi Integritas Dokumen (On-Premise)
+        </div>
+        <div>
+            User: <strong>{{ session['username'] }}</strong>
+            <span class="badge-role">{{ session['role'] }}</span>
+            <a href="{{ url_for('logout') }}" class="logout">Logout</a>
+        </div>
+    </header>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}
+            <div class="flash">{{ message }}</div>
+          {% endfor %}
+        {% endwith %}
+
+        {% if verify_result %}
+            <div class="{{ 'valid-box' if verify_result.is_valid else 'mod-box' }}">
+                <h3 style="color: white; border: none; margin: 0 0 0.5rem 0;">
+                    Hasil Verifikasi SHA-256: {{ 'VALID (DOKUMEN ASLI / UTUH)' if verify_result.is_valid else 'MODIFIED (PERINGATAN: ISI DOKUMEN TELAH BERUBAH!)' }}
+                </h3>
+                <div><strong>Dokumen Acuan:</strong> {{ verify_result.doc_name }} (v{{ verify_result.version }})</div>
+                <div><strong>SHA-256 Database :</strong> <code>{{ verify_result.expected_hash }}</code></div>
+                <div><strong>SHA-256 File Uji :</strong> <code>{{ verify_result.current_hash }}</code></div>
+            </div>
+        {% endif %}
+
+        <div class="grid">
+            {% if session['role'] in ['admin', 'operator'] %}
+            <div class="card">
+                <h3>1. Unggah & Registrasi Dokumen</h3>
+                <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+                    <label>Nama Entitas Dokumen</label>
+                    <input type="text" name="doc_name" required placeholder="Contoh: Berkas_Jamaah_01">
+                    <label>Pilih File (Data Dummy PDF/Docx)</label>
+                    <input type="file" name="file" required>
+                    <button type="submit">Hitung SHA-256 & Simpan</button>
+                </form>
+            </div>
+            {% endif %}
+
+            <div class="card">
+                <h3>2. Verifikasi Keaslian (Integrity Check)</h3>
+                <form method="POST" action="{{ url_for('verify') }}" enctype="multipart/form-data">
+                    <label>Pilih Dokumen & Versi di Database</label>
+                    <select name="doc_id" required>
+                        {% for d in docs %}
+                            <option value="{{ d.doc_id }}">[ID:{{ d.doc_id }}] {{ d.doc_name }} (v{{ d.version }})</option>
+                        {% endfor %}
+                    </select>
+                    <label>Unggah File Fisik yang Ingin Diperiksa</label>
+                    <input type="file" name="file" required>
+                    <button type="submit">Verifikasi Integritas</button>
+                </form>
+            </div>
+
+            {% if session['role'] in ['admin', 'operator'] %}
+            <div class="card">
+                <h3>3. Kunci Dokumen Sensitif (AES-256-GCM)</h3>
+                <form method="POST" action="{{ url_for('encrypt_route') }}">
+                    <label>Pilih Dokumen untuk Dienkripsi</label>
+                    <select name="doc_id" required>
+                        {% for d in docs %}
+                            <option value="{{ d.doc_id }}">[ID:{{ d.doc_id }}] {{ d.doc_name }} (v{{ d.version }})</option>
+                        {% endfor %}
+                    </select>
+                    <label>Passphrase Kunci AES-256</label>
+                    <input type="password" name="passphrase" required placeholder="Minimal 4 karakter">
+                    <button type="submit" class="btn-enc">Enkripsi ke .seal</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <h3>Daftar Dokumen Terdaftar & Fingerprint SHA-256</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Nama Dokumen</th>
+                        <th>Versi</th>
+                        <th>Sidik Jari Digital (SHA-256)</th>
+                        <th>Status AES-256</th>
+                        <th>Pengunggah</th>
+                        <th>Waktu</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in docs %}
+                    <tr>
+                        <td>#{{ d.doc_id }}</td>
+                        <td><strong>{{ d.doc_name }}</strong></td>
+                        <td>v{{ d.version }}</td>
+                        <td><code>{{ d.sha256_hash }}</code></td>
+                        <td>
+                            {% if d.is_encrypted %}
+                                <a class="dl-link" href="{{ url_for('download_seal', doc_id=d.doc_id) }}">Unduh .seal</a>
+                            {% else %}
+                                Standar
+                            {% endif %}
+                        </td>
+                        <td>{{ d.uploader }}</td>
+                        <td>{{ d.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if session['role'] in ['admin', 'auditor'] %}
+        <div class="card">
+            <h3>Audit Trail Log (Khusus Admin & Auditor)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Log ID</th>
+                        <th>Waktu</th>
+                        <th>Pelaku</th>
+                        <th>Aksi</th>
+                        <th>Doc ID</th>
+                        <th>Status</th>
+                        <th>Detail Keterangan</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for l in logs %}
+                    <tr>
+                        <td>#{{ l.log_id }}</td>
+                        <td>{{ l.timestamp }}</td>
+                        <td><strong>{{ l.actor }}</strong></td>
+                        <td><code>{{ l.action }}</code></td>
+                        <td>{{ l.doc_id if l.doc_id else '-' }}</td>
+                        <td><strong>{{ l.status_result }}</strong></td>
+                        <td>{{ l.details }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
