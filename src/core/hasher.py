@@ -127,3 +127,72 @@ def verify_document_integrity(
         "expected_hash": expected_hash,
         "current_hash": current_hash,
     }
+
+
+def scan_all_documents_integrity(user_id: int) -> Dict[str, Any]:
+    """
+    Memindai integritas seluruh berkas dokumen terdaftar secara otomatis (Batch Scan)
+    untuk mendeteksi kehilangan file fisik atau modifikasi langsung di disk (Direct Disk Tampering).
+    """
+    conn = get_db_connection()
+    docs = conn.execute(
+        "SELECT * FROM documents ORDER BY doc_id ASC"
+    ).fetchall()
+    conn.close()
+
+    results = []
+    valid_count = 0
+    modified_count = 0
+    missing_count = 0
+
+    for doc in docs:
+        fpath = Path(doc["file_path"])
+        expected_hash = doc["sha256_hash"]
+
+        if not fpath.exists():
+            status = "MISSING"
+            current_hash = "-"
+            missing_count += 1
+        else:
+            current_hash = calculate_sha256(fpath)
+            if current_hash == expected_hash:
+                status = "VALID"
+                valid_count += 1
+            else:
+                status = "MODIFIED"
+                modified_count += 1
+
+        results.append(
+            {
+                "doc_id": doc["doc_id"],
+                "doc_name": doc["doc_name"],
+                "version": doc["version"],
+                "file_path": str(fpath),
+                "expected_hash": expected_hash,
+                "current_hash": current_hash,
+                "status": status,
+            }
+        )
+
+    total = len(docs)
+    overall_status = (
+        "ALL_VALID"
+        if (modified_count == 0 and missing_count == 0)
+        else "ANOMALY_DETECTED"
+    )
+
+    log_action(
+        user_id=user_id,
+        action="BATCH_SCAN",
+        status_result=overall_status,
+        details=f"Total: {total} | Valid: {valid_count} | Modified: {modified_count} | Missing: {missing_count}",
+    )
+
+    return {
+        "total": total,
+        "valid_count": valid_count,
+        "modified_count": modified_count,
+        "missing_count": missing_count,
+        "overall_status": overall_status,
+        "results": results,
+    }

@@ -47,5 +47,22 @@ def init_db() -> None:
         );
     """)
 
+    # 4. Trigger Immutable Audit Trail (Mencegah UPDATE dan DELETE pada audit_logs)
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS prevent_audit_log_update
+        BEFORE UPDATE ON audit_logs
+        BEGIN
+            SELECT RAISE(ABORT, 'Audit logs bersifat immutable dan tidak dapat diubah!');
+        END;
+    """)
+
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS prevent_audit_log_delete
+        BEFORE DELETE ON audit_logs
+        BEGIN
+            SELECT RAISE(ABORT, 'Audit logs bersifat immutable dan tidak dapat dihapus!');
+        END;
+    """)
+
     conn.commit()
     conn.close()

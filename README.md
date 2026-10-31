@@ -17,13 +17,21 @@ Proyek ini dikembangkan sebagai pemenuhan tugas mata kuliah **Applied Cyber Secu
 
 ## Fitur Keamanan Utama
 
-1. **SHA-256 Integrity Verification & Chunking:** Menghitung sidik jari digital (*cryptographic hash*) berkas secara bertahap per blok `4096 bytes`  (4 KB) untuk efisiensi memori dan mendeteksi modifikasi sekecil 1 bit (*Avalanche Effect*).
+1. **SHA-256 Integrity Verification, Chunking, & Batch Scan:**
+   * Menghitung sidik jari digital (*cryptographic hash*) berkas secara bertahap per blok `4096 bytes` (4 KB) untuk efisiensi memori dan mendeteksi modifikasi sekecil 1 bit (*Avalanche Effect*).
+   * Dilengkapi fitur **Batch Integrity Scan** untuk memindai keutuhan seluruh arsip lokal sekaligus guna mendeteksi kehilangan file fisik (`MISSING`) atau manipulasi langsung di media penyimpanan (*Direct Disk Tampering* / `MODIFIED`).
 2. **Smart Deduplication & Auto-Versioning:**
    * Menolak pengunggahan ulang berkas yang memiliki nilai hash SHA-256 identik 100% meskipun nama filenya diubah.
-   * Menaikkan versi dokumen secara otomatis (`v1` -> `v2`, dst.) apabila dokumen dengan nama entitas yang sama diperbarui isinya.
-3. **AES-256-GCM File Encryption (`.seal`):** Mengunci berkas sensitif (*Data-at-Rest*) menggunakan algoritma **AES-256 mode GCM (*Galois/Counter Mode*)** dengan penurunan kunci **PBKDF2-HMAC-SHA256** (100.000 iterasi, 16-byte *Salt*, dan 12-byte *Nonce*). Dilengkapi *Authentication Tag* bawaan untuk menolak dekripsi jika *passphrase* salah atau file `.seal` dirusak.
-4. **Role-Based Access Control (RBAC):** Pembatasan hak akses ketat berdasarkan 4 peran fungsional instansi (`Admin`, `Operator`, `Staf`, `Auditor`) dengan pengamanan kredensial menggunakan *salted PBKDF2-HMAC-SHA256* dan proteksi *Timing Attack* (`hmac.compare_digest`).
-5. **Immutable Audit Trail Log:** Pencatatan jejak aktivitas bersifat *append-only* di database lokal untuk melacak waktu, pelaku, jenis aksi (`LOGIN`, `UPLOAD`, `VERIFY`, `ENCRYPT`, `DECRYPT`), dan status hasilnya.
+   * Menaikkan versi dokumen secara otomatis (`v1` -> `v2`, dst.) apabila dokumen dengan nama entitas yang sama diperbarui isinya, tanpa menimpa file fisik versi sebelumnya.
+3. **AES-256-GCM File Encryption & Decryption (`.seal`):**
+   * Mengunci berkas sensitif (*Data-at-Rest*) menggunakan algoritma **AES-256 mode GCM (*Galois/Counter Mode*)** dengan penurunan kunci **PBKDF2-HMAC-SHA256** (100.000 iterasi, 16-byte *Salt*, dan 12-byte *Nonce*).
+   * Dilengkapi *Authentication Tag* bawaan untuk menolak dekripsi jika *passphrase* salah atau file `.seal` telah dimodifikasi.
+4. **Role-Based Access Control (RBAC) & Brute-Force Protection:**
+   * Pembatasan hak akses ketat berdasarkan 4 peran fungsional instansi (`Admin`, `Operator`, `Staf`, `Auditor`) beserta fitur manajemen pengguna (`MANAGE_USERS`) khusus Admin.
+   * Pengamanan kredensial menggunakan *salted PBKDF2-HMAC-SHA256*, proteksi *Timing Attack* (`hmac.compare_digest`), serta penguncian akun sementara (*Account Lockout*) apabila terjadi ≥ 5 kali gagal login beruntun dalam 15 menit terakhir.
+5. **Database-Enforced Immutable Audit Trail & CSV Export:**
+   * Pencatatan jejak aktivitas bersifat *append-only* untuk melacak waktu, pelaku, jenis aksi (`LOGIN`, `LOGOUT`, `UPLOAD`, `VERIFY`, `BATCH_SCAN`, `ENCRYPT`, `DECRYPT`, `DOWNLOAD_SEAL`, `MANAGE_USERS`, `EXPORT_LOGS`), dan status hasilnya (termasuk percobaan `ACCESS_DENIED`).
+   * Dilindungi oleh **SQLite Triggers** (`BEFORE UPDATE` dan `BEFORE DELETE`) yang memblokir upaya modifikasi maupun penghapusan log secara paksa, serta mendukung ekspor laporan ke format `.CSV`.
 6. **Dual Interface (CLI & Local Web UI):** Dapat dioperasikan melalui antarmuka baris perintah (CLI) untuk administrator/otomasi maupun antarmuka Web Lokal (Flask) bebas ketergantungan internet (*offline-ready*) untuk pegawai.
 
 ---
@@ -34,6 +42,8 @@ Proyek ini dikembangkan sebagai pemenuhan tugas mata kuliah **Applied Cyber Secu
 DocSeal/
 ├── AGENTS.md                  # Panduan konteks & spesifikasi arsitektur sistem
 ├── main.py                    # Entry point utama untuk menjalankan Server Web UI Lokal
+├── run_demo.py                # Skrip simulasi otomatis end-to-end (1-click demo)
+├── pytest.ini                 # Konfigurasi path pengujian otomatis pytest
 ├── requirements.txt           # Daftar dependensi pustaka Python
 ├── data/
 │   ├── docseal.db             # Database SQLite3 lokal (Users, Documents, Audit Logs)
@@ -42,13 +52,13 @@ DocSeal/
 ├── src/
 │   ├── config.py              # Konfigurasi path absolut dinamis & kunci aplikasi
 │   ├── core/                  # Mesin kriptografi & logika keamanan inti
-│   │   ├── audit.py           # Pencatat aktivitas ke tabel audit_logs
+│   │   ├── audit.py           # Pencatat aktivitas ke audit_logs & ekspor laporan CSV
 │   │   ├── crypto.py          # Enkripsi & dekripsi dokumen dengan AES-256-GCM
-│   │   ├── hasher.py          # Mesin SHA-256, deduplikasi, & auto-versioning
-│   │   └── rbac.py            # Autentikasi pengguna & matriks izin 4 role
+│   │   ├── hasher.py          # Mesin SHA-256, deduplikasi, versioning, & batch scan
+│   │   └── rbac.py            # Autentikasi, brute-force lockout, & matriks izin 4 role
 │   ├── database/              # Manajemen database SQLite3
 │   │   ├── connection.py      # Koneksi database dengan PRAGMA foreign_keys
-│   │   ├── models.py          # Skema tabel users, documents, dan audit_logs
+│   │   ├── models.py          # Skema tabel & Trigger Immutable Audit Trail
 │   │   └── seed.py            # Inisialisasi skema & 4 akun default RBAC
 │   ├── cli/
 │   │   └── main_cli.py        # Antarmuka Command Line Interface (argparse)
@@ -58,7 +68,8 @@ DocSeal/
 └── tests/
     ├── generate_dummy.py      # Generator otomatis berkas PDF data dummy
     ├── test_crypto.py         # Unit test otomatis modul AES-256-GCM
-    └── test_hasher.py         # Unit test otomatis modul SHA-256 & Versioning
+    ├── test_hasher.py         # Unit test otomatis modul SHA-256 & Versioning
+    └── test_rbac_audit_web.py # Unit test RBAC, Immutable Trigger, Batch Scan, & Web UI
 ```
 
 ---
@@ -67,12 +78,12 @@ DocSeal/
 
 Saat database diinisialisasi (`seed.py`), sistem menyediakan 4 akun simulasi dengan pembagian wewenang berikut:
 
-| Role | Username | Password | Hak Akses Fitur (`PERMISSIONS`) |
+| Role | Username | Password | Hak Akses Fitur (`ROLE_PERMISSIONS`) |
 | :--- | :--- | :--- | :--- |
 | **Admin** | `admin` | `admin123` | `UPLOAD`, `VERIFY`, `ENCRYPT`, `DECRYPT`, `VIEW_LOGS`, `MANAGE_USERS` |
 | **Operator** | `operator` | `operator123` | `UPLOAD`, `VERIFY`, `ENCRYPT`, `DECRYPT` |
-| **Staf** | `staf` | `staf123` | `VERIFY` (Hanya pemeriksaan keaslian dokumen) |
-| **Auditor** | `auditor` | `auditor123` | `VERIFY`, `VIEW_LOGS` (Pemeriksaan keaslian & pemantauan Audit Trail) |
+| **Staf** | `staf` | `staf123` | `VERIFY` (Verifikasi dokumen satuan & Batch Integrity Scan) |
+| **Auditor** | `auditor` | `auditor123` | `VERIFY`, `VIEW_LOGS` (Pemeriksaan keaslian & ekspor laporan Audit Trail CSV) |
 
 ---
 
@@ -103,6 +114,16 @@ Saat database diinisialisasi (`seed.py`), sistem menyediakan 4 akun simulasi den
 
 ---
 
+## Simulasi Otomatis Satu Klik (*End-to-End Demo*)
+
+Untuk menjalankan demonstrasi seluruh fitur secara otomatis (Reset DB -> Seed -> Generate PDF Dummy -> Upload `v1` -> Tolak Duplikat -> Upload Revisi `v2` -> Verifikasi Valid vs Modified -> Batch Scan -> Enkripsi & Dekripsi AES-256-GCM -> Ekspor Audit CSV):
+
+```bash
+python3 run_demo.py
+```
+
+---
+
 ## Panduan Penggunaan Antarmuka Web UI Lokal
 
 Jalankan server Flask lokal dari *root directory* proyek:
@@ -112,16 +133,21 @@ python3 main.py
 ```
 
 Buka peramban (*browser*) dan akses alamat: **`http://127.0.0.1:5000`**
-* Login menggunakan salah satu akun RBAC di atas untuk menguji pengunggahan dokumen, pemeriksaan keaslian SHA-256, penguncian AES-256-GCM (`.seal`), dan pemantauan tabel *Audit Trail*.
+* Login menggunakan salah satu akun RBAC di atas untuk menguji:
+  1. **Unggah & Registrasi Dokumen** (SHA-256, Deduplikasi, & Auto-Versioning).
+  2. **Verifikasi Keaslian Satuan & Batch Integrity Scan** seluruh arsip lokal.
+  3. **Enkripsi Dokumen Sensitif** ke format `.seal` (AES-256-GCM) dan pengunduhan arsip `.seal`.
+  4. **Dekripsi Arsip `.seal`** kembali ke dokumen asli langsung dari browser.
+  5. **Manajemen Pengguna RBAC** (Khusus Admin) & **Unduh Laporan Audit Trail `.CSV`** (Khusus Admin & Auditor).
 
 ---
 
 ## Panduan Penggunaan Antarmuka CLI (Terminal)
 
-Seluruh fitur inti juga dapat diakses langsung melalui terminal:
+Seluruh fitur juga dapat diakses langsung melalui terminal:
 
 ```bash
-# 1. Unggah dokumen asli oleh Operator 
+# 1. Unggah dokumen asli oleh Operator
 python3 -m src.cli.main_cli upload -u operator -p operator123 -f data/dummy_docs/Berkas_Jamaah_01.pdf -n "Berkas_Jamaah_01"
 
 # 2. Uji unggah duplikat identik (Otomatis ditolak oleh sistem)
@@ -133,26 +159,34 @@ python3 -m src.cli.main_cli upload -u operator -p operator123 -f data/dummy_docs
 # 4. Lihat daftar dokumen yang terdaftar di database
 python3 -m src.cli.main_cli list
 
-# 5. Verifikasi integritas dokumen oleh Staf (Hasil: VALID vs MODIFIED)
+# 5. Verifikasi integritas dokumen satuan oleh Staf (Hasil: VALID vs MODIFIED)
 python3 -m src.cli.main_cli verify -u staf -p staf123 -i 1 -f data/dummy_docs/Berkas_Jamaah_01.pdf
 python3 -m src.cli.main_cli verify -u staf -p staf123 -i 1 -f data/dummy_docs/Berkas_Jamaah_01_Revisi.pdf
 
-# 6. Enkripsi dokumen ke format .seal (AES-256-GCM)
+# 6. Pindai keutuhan seluruh arsip dokumen sekaligus (Batch Integrity Scan)
+python3 -m src.cli.main_cli scan -u staf -p staf123
+
+# 7. Enkripsi dokumen ke format .seal (AES-256-GCM)
 python3 -m src.cli.main_cli encrypt -u operator -p operator123 -i 1 -k "rahasiahaji"
 
-# 7. Dekripsi file .seal kembali ke PDF utuh
-python3 -m src.cli.main_cli decrypt -u operator -p operator123 -f data/encrypted/Berkas_Jamaah_01_v1.seal -o data/dummy_docs/Hasil_Dekripsi.pdf -k "rahasiahaji"
+# 8. Dekripsi file .seal kembali ke PDF utuh
+python3 -m src.cli.main_cli decrypt -u operator -p operator123 -i 1 -f data/encrypted/Berkas_Jamaah_01_v1.seal -o data/dummy_docs/Hasil_Dekripsi.pdf -k "rahasiahaji"
 
-# 8. Tampilkan riwayat Audit Trail (Khusus Admin & Auditor)
+# 9. Kelola akun pengguna RBAC (Khusus Admin)
+python3 -m src.cli.main_cli users -u admin -p admin123
+python3 -m src.cli.main_cli add-user -u admin -p admin123 --new-user staf_tabanan --new-pass staf1234 --role staf
+
+# 10. Tampilkan & ekspor riwayat Audit Trail ke CSV (Khusus Admin & Auditor)
 python3 -m src.cli.main_cli logs -u auditor -p auditor123
+python3 -m src.cli.main_cli export-logs -u auditor -p auditor123 -o data/DocSeal_Audit_Trail.csv
 ```
 
 ---
 
 ## Pengujian Unit Otomatis (*Automated Unit Testing*)
 
-Untuk menjalankan pengujian otomatis terhadap siklus hidup dokumen (SHA-256, deduplikasi, *auto-versioning*) serta keandalan enkripsi/dekripsi AES-256-GCM menggunakan database terisolasi sementara:
+Untuk menjalankan seluruh *test suite* otomatis (SHA-256, Deduplikasi, Auto-Versioning, AES-256-GCM, RBAC, Brute-Force Lockout, SQLite Immutable Audit Trigger, Batch Scan, dan Web UI endpoints) menggunakan environment terisolasi:
 
 ```bash
-python3 -m pytest -v
+pytest -v
 ```

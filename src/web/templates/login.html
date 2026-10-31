@@ -12,7 +12,9 @@
         input { width: 100%; padding: 0.65rem; margin-bottom: 1rem; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; }
         button { width: 100%; padding: 0.75rem; background: #0284c7; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
         button:hover { background: #0369a1; }
-        .alert { padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; background: #7f1d1d; color: #fecaca; }
+        .alert { padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; background: #7f1d1d; color: #fecaca; border-left: 4px solid #ef4444; }
+        .alert.success { background: #064e3b; color: #d1fae5; border-left-color: #10b981; }
+        .alert.warning { background: #78350f; color: #fef3c7; border-left-color: #f59e0b; }
         .roles-hint { margin-top: 1.2rem; font-size: 0.78rem; color: #94a3b8; background: #0f172a; padding: 0.75rem; border-radius: 6px; }
     </style>
 </head>
@@ -23,7 +25,7 @@
 
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% for category, message in messages %}
-            <div class="alert">{{ message }}</div>
+            <div class="alert {{ category }}">{{ message }}</div>
           {% endfor %}
         {% endwith %}
 

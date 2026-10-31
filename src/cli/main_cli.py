@@ -1,8 +1,13 @@
 import argparse
 import sys
 from src.database.connection import get_db_connection
-from src.core.rbac import authenticate_user, has_permission
-from src.core.hasher import register_document, verify_document_integrity
+from src.core.audit import log_action, export_audit_logs_csv
+from src.core.rbac import authenticate_user, has_permission, create_user, list_users
+from src.core.hasher import (
+    register_document,
+    verify_document_integrity,
+    scan_all_documents_integrity,
+)
 from src.core.crypto import encrypt_document, decrypt_document
 
 
@@ -14,6 +19,12 @@ def require_auth_and_perm(username: str, password: str, action: str) -> dict:
         sys.exit(1)
 
     if not has_permission(user["role"], action):
+        log_action(
+            user_id=user["user_id"],
+            action=action,
+            status_result="ACCESS_DENIED",
+            details=f"Role '{user['role']}' ditolak saat menjalankan aksi '{action}' via CLI",
+        )
         print(
             f"[-] Akses Ditolak (RBAC): Role '{user['role']}' tidak diizinkan melakukan '{action}'."
         )
@@ -126,11 +137,52 @@ def main() -> None:
     dec.add_argument(
         "-k", "--key", required=True, help="Passphrase kunci dekripsi AES-256"
     )
+    dec.add_argument(
+        "-i", "--id", type=int, default=None, help="ID Dokumen (opsional untuk Audit Log)"
+    )
 
     # 6. Sub-command: logs
     lg = subparsers.add_parser("logs", help="Tampilkan catatan Audit Trail")
     lg.add_argument("-u", "--user", required=True, help="Username")
     lg.add_argument("-p", "--password", required=True, help="Password")
+
+    # 7. Sub-command: add-user (Khusus Admin)
+    au = subparsers.add_parser("add-user", help="Tambah pengguna baru (Khusus Admin)")
+    au.add_argument("-u", "--user", required=True, help="Username Admin")
+    au.add_argument("-p", "--password", required=True, help="Password Admin")
+    au.add_argument("--new-user", required=True, help="Username akun baru")
+    au.add_argument("--new-pass", required=True, help="Password akun baru")
+    au.add_argument(
+        "--role",
+        required=True,
+        choices=["admin", "operator", "staf", "auditor"],
+        help="Role akun baru",
+    )
+
+    # 8. Sub-command: users (Khusus Admin)
+    us = subparsers.add_parser("users", help="Lihat daftar pengguna (Khusus Admin)")
+    us.add_argument("-u", "--user", required=True, help="Username Admin")
+    us.add_argument("-p", "--password", required=True, help="Password Admin")
+
+    # 9. Sub-command: scan (Batch Integrity Check seluruh dokumen di disk)
+    sc = subparsers.add_parser(
+        "scan", help="Pindai keutuhan seluruh arsip dokumen terdaftar (Batch Scan)"
+    )
+    sc.add_argument("-u", "--user", required=True, help="Username")
+    sc.add_argument("-p", "--password", required=True, help="Password")
+
+    # 10. Sub-command: export-logs (Ekspor Audit Trail ke CSV)
+    el = subparsers.add_parser(
+        "export-logs", help="Ekspor laporan Audit Trail ke file CSV (Khusus Admin/Auditor)"
+    )
+    el.add_argument("-u", "--user", required=True, help="Username")
+    el.add_argument("-p", "--password", required=True, help="Password")
+    el.add_argument(
+        "-o",
+        "--output",
+        default="data/DocSeal_Audit_Trail.csv",
+        help="Path file CSV output (default: data/DocSeal_Audit_Trail.csv)",
+    )
 
     args = parser.parse_args()
 
@@ -155,10 +207,38 @@ def main() -> None:
             print(f"[+] {res['message']} -> {res['encrypted_file']}")
         elif args.command == "decrypt":
             user = require_auth_and_perm(args.user, args.password, "DECRYPT")
-            res = decrypt_document(args.file, args.key, args.output, user["user_id"])
+            res = decrypt_document(
+                args.file, args.key, args.output, user["user_id"], doc_id=args.id
+            )
             print(f"[+] {res['message']}")
         elif args.command == "logs":
             cmd_logs(args.user, args.password)
+        elif args.command == "add-user":
+            admin = require_auth_and_perm(args.user, args.password, "MANAGE_USERS")
+            res = create_user(args.new_user, args.new_pass, args.role, admin["user_id"])
+            print(f"[+] {res['message']} (ID: {res['user_id']})")
+        elif args.command == "users":
+            require_auth_and_perm(args.user, args.password, "MANAGE_USERS")
+            print("\n=== DAFTAR AKUN PENGGUNA DOCSEAL ===")
+            for u in list_users():
+                print(
+                    f"ID: {u['user_id']} | Username: {u['username']} | Role: {u['role'].upper()} | Dibuat: {u['created_at']}"
+                )
+        elif args.command == "scan":
+            user = require_auth_and_perm(args.user, args.password, "VERIFY")
+            res = scan_all_documents_integrity(user["user_id"])
+            print(f"\n=== HASIL BATCH INTEGRITY SCAN ({res['overall_status']}) ===")
+            print(
+                f"Total: {res['total']} | Valid: {res['valid_count']} | Modified: {res['modified_count']} | Missing: {res['missing_count']}"
+            )
+            for item in res["results"]:
+                print(
+                    f"  - [ID:{item['doc_id']}] {item['doc_name']} (v{item['version']}) -> {item['status']}"
+                )
+        elif args.command == "export-logs":
+            user = require_auth_and_perm(args.user, args.password, "VIEW_LOGS")
+            export_audit_logs_csv(user["user_id"], output_path=args.output)
+            print(f"[+] Laporan Audit Trail berhasil diekspor ke: {args.output}")
     except Exception as e:
         print(f"[-] Error: {e}")
         sys.exit(1)

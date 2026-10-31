@@ -6,3 +6,5 @@ data/docseal.db
 data/dummy_docs/*.pdf
 data/encrypted/*.seal
 data/temp_verify_*
+data/temp_upload_*
+data/*.csv

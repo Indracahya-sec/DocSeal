@@ -15,6 +15,8 @@
         input, select { width: 100%; padding: 0.55rem; margin-bottom: 0.8rem; border-radius: 5px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; }
         button { padding: 0.6rem 1rem; background: #0284c7; color: #fff; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; }
         button.btn-enc { background: #7c3aed; }
+        button.btn-dec { background: #059669; }
+        button.btn-usr { background: #d97706; }
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         th, td { padding: 0.65rem; text-align: left; border-bottom: 1px solid #334155; }
         th { background: #0f172a; color: #94a3b8; }
@@ -22,6 +24,9 @@
         .valid-box { background: #064e3b; border: 2px solid #10b981; color: #ecfdf5; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
         .mod-box { background: #7f1d1d; border: 2px solid #ef4444; color: #fef2f2; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
         .flash { padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 1rem; background: #1e3a8a; border-left: 4px solid #38bdf8; }
+        .flash.success { background: #064e3b; border-left-color: #10b981; color: #d1fae5; }
+        .flash.danger { background: #7f1d1d; border-left-color: #ef4444; color: #fecaca; }
+        .flash.warning { background: #78350f; border-left-color: #f59e0b; color: #fef3c7; }
         a.logout { color: #f87171; text-decoration: none; font-weight: bold; margin-left: 1rem; }
         a.dl-link { color: #a78bfa; text-decoration: none; font-weight: bold; }
     </style>
@@ -41,7 +46,7 @@
     <div class="container">
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% for category, message in messages %}
-            <div class="flash">{{ message }}</div>
+            <div class="flash {{ category }}">{{ message }}</div>
           {% endfor %}
         {% endwith %}
 
@@ -53,6 +58,42 @@
                 <div><strong>Dokumen Acuan:</strong> {{ verify_result.doc_name }} (v{{ verify_result.version }})</div>
                 <div><strong>SHA-256 Database :</strong> <code>{{ verify_result.expected_hash }}</code></div>
                 <div><strong>SHA-256 File Uji :</strong> <code>{{ verify_result.current_hash }}</code></div>
+            </div>
+        {% endif %}
+
+        {% if scan_result %}
+            <div class="{{ 'valid-box' if scan_result.overall_status == 'ALL_VALID' else 'mod-box' }}">
+                <h3 style="color: white; border: none; margin: 0 0 0.5rem 0;">
+                    Hasil Batch Integrity Scan: {{ 'SEMUA DOKUMEN UTUH (ALL VALID)' if scan_result.overall_status == 'ALL_VALID' else 'PERINGATAN ANOMALI DITEMUKAN!' }}
+                </h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <strong>Total:</strong> {{ scan_result.total }} dokumen |
+                    <strong>Valid:</strong> {{ scan_result.valid_count }} |
+                    <strong>Modified:</strong> {{ scan_result.modified_count }} |
+                    <strong>Missing:</strong> {{ scan_result.missing_count }}
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Doc ID</th>
+                            <th>Nama Dokumen</th>
+                            <th>Status Fisik</th>
+                            <th>SHA-256 Database</th>
+                            <th>SHA-256 Disk Saat Ini</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in scan_result.results %}
+                        <tr>
+                            <td>#{{ item.doc_id }}</td>
+                            <td><strong>{{ item.doc_name }} (v{{ item.version }})</strong></td>
+                            <td><strong>{{ item.status }}</strong></td>
+                            <td><code>{{ item.expected_hash[:20] }}...</code></td>
+                            <td><code>{{ item.current_hash[:20] + '...' if item.current_hash != '-' else 'FILE HILANG' }}</code></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         {% endif %}
 
@@ -83,6 +124,10 @@
                     <input type="file" name="file" required>
                     <button type="submit">Verifikasi Integritas</button>
                 </form>
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 1rem 0;">
+                <form method="POST" action="{{ url_for('scan_all_route') }}">
+                    <button type="submit" style="width: 100%; background: #0f766e;">Pindai Seluruh Arsip Lokal (Batch Scan)</button>
+                </form>
             </div>
 
             {% if session['role'] in ['admin', 'operator'] %}
@@ -98,6 +143,41 @@
                     <label>Passphrase Kunci AES-256</label>
                     <input type="password" name="passphrase" required placeholder="Minimal 4 karakter">
                     <button type="submit" class="btn-enc">Enkripsi ke .seal</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h3>4. Buka Kunci / Dekripsi Arsip (.seal)</h3>
+                <form method="POST" action="{{ url_for('decrypt_route') }}">
+                    <label>Pilih Dokumen Terenkripsi (.seal)</label>
+                    <select name="doc_id" required>
+                        {% for d in docs if d.is_encrypted %}
+                            <option value="{{ d.doc_id }}">[ID:{{ d.doc_id }}] {{ d.doc_name }} (v{{ d.version }}.seal)</option>
+                        {% endfor %}
+                    </select>
+                    <label>Passphrase Kunci AES-256</label>
+                    <input type="password" name="passphrase" required placeholder="Masukkan passphrase dekripsi">
+                    <button type="submit" class="btn-dec">Dekripsi & Unduh Dokumen</button>
+                </form>
+            </div>
+            {% endif %}
+
+            {% if session['role'] == 'admin' %}
+            <div class="card">
+                <h3>5. Manajemen Pengguna RBAC (Admin)</h3>
+                <form method="POST" action="{{ url_for('create_user_route') }}">
+                    <label>Username Baru</label>
+                    <input type="text" name="username" required placeholder="Contoh: staf_tabanan">
+                    <label>Password</label>
+                    <input type="password" name="password" required placeholder="Minimal 4 karakter">
+                    <label>Role Fungsional</label>
+                    <select name="role" required>
+                        <option value="staf">Staf (VERIFY)</option>
+                        <option value="operator">Operator (UPLOAD, VERIFY, ENCRYPT, DECRYPT)</option>
+                        <option value="auditor">Auditor (VERIFY, VIEW_LOGS)</option>
+                        <option value="admin">Admin (Full Access + MANAGE_USERS)</option>
+                    </select>
+                    <button type="submit" class="btn-usr">Tambah Akun Pengguna</button>
                 </form>
             </div>
             {% endif %}
@@ -126,7 +206,11 @@
                         <td><code>{{ d.sha256_hash }}</code></td>
                         <td>
                             {% if d.is_encrypted %}
-                                <a class="dl-link" href="{{ url_for('download_seal', doc_id=d.doc_id) }}">Unduh .seal</a>
+                                {% if session['role'] in ['admin', 'operator'] %}
+                                    <a class="dl-link" href="{{ url_for('download_seal', doc_id=d.doc_id) }}">Unduh .seal</a>
+                                {% else %}
+                                    <code>Terkunci (.seal)</code>
+                                {% endif %}
                             {% else %}
                                 Standar
                             {% endif %}
@@ -139,9 +223,38 @@
             </table>
         </div>
 
+        {% if session['role'] == 'admin' and users %}
+        <div class="card">
+            <h3>Daftar Akun Pengguna Sistem (RBAC)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>User ID</th>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Waktu Terdaftar</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td>#{{ u.user_id }}</td>
+                        <td><strong>{{ u.username }}</strong></td>
+                        <td><span class="badge-role">{{ u.role }}</span></td>
+                        <td>{{ u.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
         {% if session['role'] in ['admin', 'auditor'] %}
         <div class="card">
-            <h3>Audit Trail Log (Khusus Admin & Auditor)</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 0.8rem;">
+                <h3 style="border: none; padding: 0; margin: 0;">Audit Trail Log (Khusus Admin & Auditor)</h3>
+                <a href="{{ url_for('export_logs_route') }}" style="background: #059669; color: white; text-decoration: none; padding: 0.45rem 0.85rem; border-radius: 5px; font-size: 0.82rem; font-weight: bold;">Unduh Laporan Audit (.CSV)</a>
+            </div>
             <table>
                 <thead>
                     <tr>
