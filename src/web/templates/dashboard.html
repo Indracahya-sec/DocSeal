@@ -12,7 +12,7 @@
         .card { background: #1e293b; padding: 1.25rem; border-radius: 8px; border: 1px solid #334155; margin-bottom: 1.5rem; }
         h3 { margin-top: 0; color: #38bdf8; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
         label { display: block; font-size: 0.85rem; margin-bottom: 0.3rem; color: #cbd5e1; }
-        input, select { width: 100%; padding: 0.55rem; margin-bottom: 0.8rem; border-radius: 5px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; }
+        input, select, textarea { width: 100%; padding: 0.55rem; margin-bottom: 0.8rem; border-radius: 5px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; font-family: inherit; }
         button { padding: 0.6rem 1rem; background: #0284c7; color: #fff; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; }
         button.btn-enc { background: #7c3aed; }
         button.btn-dec { background: #059669; }
@@ -99,6 +99,23 @@
 
         <div class="grid">
             {% if session['role'] in ['admin', 'operator'] %}
+            <div class="card">
+                <h3>Buat PDF Dummy Kustom</h3>
+                <form method="POST" action="{{ url_for('generate_dummy_route') }}">
+                    <label>Nama Dokumen PDF</label>
+                    <input type="text" name="doc_name" required placeholder="Contoh: Berkas_Jamaah_Baru">
+                    <label>Isi Teks di Dalam PDF</label>
+                    <textarea name="content" rows="3" required placeholder="Contoh: Nama: I Ketut Dummy&#10;NIK: 51020001&#10;Alamat: Tabanan"></textarea>
+                    <label>Tindakan Setelah PDF Dibuat</label>
+                    <select name="mode">
+                        <option value="save_only">Simpan ke folder data/dummy_docs/</option>
+                        <option value="download">Simpan &amp; Unduh PDF ke Komputer</option>
+                        <option value="register">Simpan &amp; Langsung Registrasi SHA-256</option>
+                    </select>
+                    <button type="submit" style="background: #0d9488;">Buat Dokumen PDF Dummy</button>
+                </form>
+            </div>
+
             <div class="card">
                 <h3>1. Unggah & Registrasi Dokumen</h3>
                 <form method="POST" action="{{ url_for('upload') }}" enctype="multipart/form-data">

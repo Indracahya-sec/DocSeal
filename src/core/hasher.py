@@ -1,7 +1,8 @@
+from collections import Counter
 import hashlib
 from pathlib import Path
-from typing import Dict, Any
-from src.database.connection import get_db_connection
+from typing import Any
+from src.database.connection import db_session
 from src.core.audit import log_action
 
 
@@ -11,78 +12,59 @@ def calculate_sha256(file_path: str | Path) -> str:
     if not path.exists():
         raise FileNotFoundError(f"Berkas tidak ditemukan: {path}")
 
-    sha256_Engine = hashlib.sha256()
-    with open(path, "rb") as f:
-        # Membaca per 4096 bytes agar hemat RAM meskipun file berukuran besar
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_Engine.update(byte_block)
-
-    return sha256_Engine.hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(4096):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def register_document(
     file_path: str | Path, doc_name: str, user_id: int
-) -> Dict[str, Any]:
-    """
-    Mendaftarkan dokumen ke database sekaligus mengecek:
-    1. Apakah file 100% duplikat identik?
-    2. Apakah file merupakan revisi baru dari dokumen yang sudah ada?
-    """
+) -> dict[str, Any]:
+    """Mendaftarkan dokumen ke database sekaligus menangani deduplikasi dan auto-versioning."""
     file_hash = calculate_sha256(file_path)
-    conn = get_db_connection()
-    cursor = conn.cursor()
 
-    # Skenario 1: Cek Duplikat Fisik (Apakah nilai hash sudah ada di DB?)
-    cursor.execute("SELECT * FROM documents WHERE sha256_hash = ?", (file_hash,))
-    duplicate = cursor.fetchone()
-    if duplicate:
-        conn.close()
+    with db_session() as conn:
+        if dup := conn.execute(
+            "SELECT * FROM documents WHERE sha256_hash = ?", (file_hash,)
+        ).fetchone():
+            dup_data = dict(dup)
+        else:
+            dup_data = None
+            (new_version,) = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM documents WHERE doc_name = ?",
+                (doc_name,),
+            ).fetchone()
+            doc_id = conn.execute(
+                "INSERT INTO documents (doc_name, file_path, sha256_hash, version, uploaded_by) VALUES (?, ?, ?, ?, ?)",
+                (doc_name, str(file_path), file_hash, new_version, user_id),
+            ).lastrowid
+
+    if dup_data:
         log_action(
-            user_id=user_id,
-            action="UPLOAD",
-            doc_id=duplicate["doc_id"],
-            status_result="DUPLICATE_REJECTED",
-            details=f"File identik dengan {duplicate['doc_name']} (v{duplicate['version']})",
+            user_id,
+            "UPLOAD",
+            "DUPLICATE_REJECTED",
+            doc_id=dup_data["doc_id"],
+            details=f"File identik dengan {dup_data['doc_name']} (v{dup_data['version']})",
         )
         return {
             "status": "DUPLICATE",
-            "message": f"Ditolak! Isi file 100% identik dengan '{duplicate['doc_name']}' versi v{duplicate['version']}.",
+            "message": f"Ditolak! Isi file 100% identik dengan '{dup_data['doc_name']}' versi v{dup_data['version']}.",
             "sha256": file_hash,
         }
 
-    # Skenario 2: Cek Versioning (Apakah doc_name sudah ada tapi isinya/hash berbeda?)
-    cursor.execute(
-        "SELECT MAX(version) as latest_ver FROM documents WHERE doc_name = ?",
-        (doc_name,),
-    )
-    row = cursor.fetchone()
-    new_version = (
-        (row["latest_ver"] + 1) if (row and row["latest_ver"] is not None) else 1
-    )
-
-    # Simpan dokumen baru atau versi revisi ke database
-    cursor.execute(
-        """
-        INSERT INTO documents (doc_name, file_path, sha256_hash, version, uploaded_by)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (doc_name, str(file_path), file_hash, new_version, user_id),
-    )
-    doc_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-
-    action_status = "NEW_VERSION" if new_version > 1 else "NEW_DOCUMENT"
+    status = "NEW_VERSION" if new_version > 1 else "NEW_DOCUMENT"
     log_action(
-        user_id=user_id,
-        action="UPLOAD",
+        user_id,
+        "UPLOAD",
+        status,
         doc_id=doc_id,
-        status_result=action_status,
         details=f"Terdaftar sebagai {doc_name} v{new_version}",
     )
-
     return {
-        "status": action_status,
+        "status": status,
         "doc_id": doc_id,
         "version": new_version,
         "sha256": file_hash,
@@ -92,104 +74,73 @@ def register_document(
 
 def verify_document_integrity(
     doc_id: int, target_file_path: str | Path, user_id: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Membandingkan hash file saat ini dengan hash asli di database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,))
-    doc = cursor.fetchone()
-    conn.close()
+    with db_session() as conn:
+        if not (doc := conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()):
+            raise ValueError(f"Dokumen dengan ID {doc_id} tidak ditemukan di database.")
 
-    if not doc:
-        raise ValueError(f"Dokumen dengan ID {doc_id} tidak ditemukan di database.")
-
-    current_hash = calculate_sha256(target_file_path)
     expected_hash = doc["sha256_hash"]
+    current_hash = calculate_sha256(target_file_path)
     is_valid = current_hash == expected_hash
+    status = "VALID" if is_valid else "MODIFIED"
 
-    status_str = "VALID" if is_valid else "MODIFIED"
     log_action(
-        user_id=user_id,
-        action="VERIFY",
+        user_id,
+        "VERIFY",
+        status,
         doc_id=doc_id,
-        status_result=status_str,
-        details=f"Hash cocok"
-        if is_valid
-        else f"Mismatch! DB: {expected_hash[:10]}... vs File: {current_hash[:10]}...",
+        details="Hash cocok" if is_valid else f"Mismatch! DB: {expected_hash[:10]}... vs File: {current_hash[:10]}...",
     )
-
     return {
         "doc_id": doc_id,
         "doc_name": doc["doc_name"],
         "version": doc["version"],
         "is_valid": is_valid,
-        "status": status_str,
+        "status": status,
         "expected_hash": expected_hash,
         "current_hash": current_hash,
     }
 
 
-def scan_all_documents_integrity(user_id: int) -> Dict[str, Any]:
-    """
-    Memindai integritas seluruh berkas dokumen terdaftar secara otomatis (Batch Scan)
-    untuk mendeteksi kehilangan file fisik atau modifikasi langsung di disk (Direct Disk Tampering).
-    """
-    conn = get_db_connection()
-    docs = conn.execute(
-        "SELECT * FROM documents ORDER BY doc_id ASC"
-    ).fetchall()
-    conn.close()
-
-    results = []
-    valid_count = 0
-    modified_count = 0
-    missing_count = 0
-
-    for doc in docs:
-        fpath = Path(doc["file_path"])
-        expected_hash = doc["sha256_hash"]
-
-        if not fpath.exists():
-            status = "MISSING"
-            current_hash = "-"
-            missing_count += 1
-        else:
-            current_hash = calculate_sha256(fpath)
-            if current_hash == expected_hash:
-                status = "VALID"
-                valid_count += 1
-            else:
-                status = "MODIFIED"
-                modified_count += 1
-
-        results.append(
-            {
-                "doc_id": doc["doc_id"],
-                "doc_name": doc["doc_name"],
-                "version": doc["version"],
-                "file_path": str(fpath),
-                "expected_hash": expected_hash,
-                "current_hash": current_hash,
-                "status": status,
-            }
-        )
-
-    total = len(docs)
-    overall_status = (
-        "ALL_VALID"
-        if (modified_count == 0 and missing_count == 0)
-        else "ANOMALY_DETECTED"
-    )
-
-    log_action(
-        user_id=user_id,
-        action="BATCH_SCAN",
-        status_result=overall_status,
-        details=f"Total: {total} | Valid: {valid_count} | Modified: {modified_count} | Missing: {missing_count}",
-    )
+def _inspect_doc_row(doc: Any) -> dict[str, Any]:
+    """Memeriksa keberadaan dan kecocokan hash satu baris dokumen di disk."""
+    fpath, expected = Path(doc["file_path"]), doc["sha256_hash"]
+    if not fpath.exists():
+        current, status = "-", "MISSING"
+    else:
+        current = calculate_sha256(fpath)
+        status = "VALID" if current == expected else "MODIFIED"
 
     return {
-        "total": total,
+        "doc_id": doc["doc_id"],
+        "doc_name": doc["doc_name"],
+        "version": doc["version"],
+        "file_path": str(fpath),
+        "expected_hash": expected,
+        "current_hash": current,
+        "status": status,
+    }
+
+
+def scan_all_documents_integrity(user_id: int) -> dict[str, Any]:
+    """Memindai integritas seluruh berkas dokumen terdaftar secara otomatis (Batch Scan)."""
+    with db_session() as conn:
+        docs = conn.execute("SELECT * FROM documents ORDER BY doc_id ASC").fetchall()
+
+    results = [_inspect_doc_row(doc) for doc in docs]
+    counts = Counter(item["status"] for item in results)
+    valid_count, modified_count, missing_count = counts["VALID"], counts["MODIFIED"], counts["MISSING"]
+    overall_status = "ALL_VALID" if not (modified_count or missing_count) else "ANOMALY_DETECTED"
+
+    log_action(
+        user_id,
+        "BATCH_SCAN",
+        overall_status,
+        details=f"Total: {len(results)} | Valid: {valid_count} | Modified: {modified_count} | Missing: {missing_count}",
+    )
+    return {
+        "total": len(results),
         "valid_count": valid_count,
         "modified_count": modified_count,
         "missing_count": missing_count,

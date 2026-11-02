@@ -8,6 +8,7 @@ from src.core.audit import export_audit_logs_csv
 from src.core.rbac import authenticate_user, has_permission, create_user, list_users, is_account_locked
 from src.core.hasher import register_document, scan_all_documents_integrity
 from src.web.app import app
+from tests.generate_dummy import create_custom_pdf
 
 
 @pytest.fixture
@@ -146,4 +147,31 @@ def test_batch_scan_export_csv_and_bruteforce_lockout(full_env: Path):
     assert is_account_locked("auditor") is True
     # Bahkan dengan password benar pun akan ditolak saat sedang terkunci
     assert authenticate_user("auditor", "auditor123") is None
+
+
+def test_custom_dummy_pdf_generator(full_env: Path):
+    # 1. Uji pembuatan PDF dummy kustom via fungsi langsung
+    out_pdf = create_custom_pdf(
+        filename="Surat Tugas Tabanan",
+        content="Nama: I Wayan Dummy\nKeterangan: Petugas Kloter 05",
+        output_dir=full_env / "dummy_docs",
+    )
+    assert out_pdf.exists()
+    assert out_pdf.name == "Surat_Tugas_Tabanan.pdf"
+    assert out_pdf.read_bytes().startswith(b"%PDF")
+
+    # 2. Uji pembuatan & registrasi langsung via Web UI oleh Operator
+    client = app.test_client()
+    client.post("/login", data={"username": "operator", "password": "operator123"})
+    res = client.post(
+        "/generate-dummy",
+        data={
+            "doc_name": "Rekomendasi_Paspor_01",
+            "content": "Isi surat rekomendasi paspor jamaah dummy.",
+            "mode": "register",
+        },
+        follow_redirects=True,
+    )
+    assert res.status_code == 200
+    assert b"Rekomendasi_Paspor_01" in res.data
 

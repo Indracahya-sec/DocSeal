@@ -45,6 +45,8 @@ DocSeal/
 ├── run_demo.py                # Skrip simulasi otomatis end-to-end (1-click demo)
 ├── pytest.ini                 # Konfigurasi path pengujian otomatis pytest
 ├── requirements.txt           # Daftar dependensi pustaka Python
+├── docs/
+│   └── FLOWCHART_ARSITEKTUR.md # Flowchart interaktif arsitektur & tautan baris kode
 ├── data/
 │   ├── docseal.db             # Database SQLite3 lokal (Users, Documents, Audit Logs)
 │   ├── dummy_docs/            # Penyimpanan berkas PDF dummy hasil simulasi
@@ -71,6 +73,8 @@ DocSeal/
     ├── test_hasher.py         # Unit test otomatis modul SHA-256 & Versioning
     └── test_rbac_audit_web.py # Unit test RBAC, Immutable Trigger, Batch Scan, & Web UI
 ```
+
+> **Diagram Alur Kode Interaktif:** Lihat [docs/FLOWCHART_ARSITEKTUR.md](docs/FLOWCHART_ARSITEKTUR.md) untuk melihat *flowchart* arsitektur lengkap dengan tautan klik langsung ke masing-masing fungsi dan baris kode.
 
 ---
 
@@ -108,9 +112,15 @@ Saat database diinisialisasi (`seed.py`), sistem menyediakan 4 akun simulasi den
 
 4. **Bangkitkan Berkas PDF Dummy untuk Pengujian:**
    ```bash
+   # Mode otomatis (membuat 3 file dummy bawaan: Asli, Copy, dan Revisi)
+   python3 -m tests.generate_dummy --default
+
+   # Mode interaktif (memasukkan nama dokumen & isi teks sendiri di terminal)
    python3 -m tests.generate_dummy
+
+   # Mode cepat 1 baris dengan argumen nama & isi dokumen
+   python3 -m tests.generate_dummy -n "Surat_Rekomendasi_01" -i "Nama: I Ketut Simulasi\nAlamat: Tabanan"
    ```
-   *(Menghasilkan `Berkas_Jamaah_01.pdf`, `Berkas_Jamaah_01_Copy.pdf`, dan `Berkas_Jamaah_01_Revisi.pdf` di dalam folder `data/dummy_docs/`).*
 
 ---
 

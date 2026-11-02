@@ -1,74 +1,67 @@
 import csv
 import io
 from pathlib import Path
-from typing import Optional
-from src.database.connection import get_db_connection
+from src.database.connection import db_session
 
 
 def log_action(
-    user_id: Optional[int],
+    user_id: int | None,
     action: str,
     status_result: str,
-    doc_id: Optional[int] = None,
+    doc_id: int | None = None,
     details: str = "",
 ) -> None:
     """Mencatat setiap aktivitas pengguna ke tabel audit_logs."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO audit_logs (user_id, action, doc_id, status_result, details)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (user_id, action.upper(), doc_id, status_result.upper(), details),
-    )
-    conn.commit()
-    conn.close()
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO audit_logs (user_id, action, doc_id, status_result, details) VALUES (?, ?, ?, ?, ?)",
+            (user_id, action.upper(), doc_id, status_result.upper(), details),
+        )
 
 
-def export_audit_logs_csv(actor_user_id: int, output_path: Optional[str | Path] = None) -> str:
+def export_audit_logs_csv(
+    actor_user_id: int, output_path: str | Path | None = None
+) -> str:
     """Mengekspor seluruh catatan Audit Trail ke format CSV dan mencatat aktivitas ekspor."""
     log_action(
-        user_id=actor_user_id,
-        action="EXPORT_LOGS",
-        status_result="SUCCESS",
+        actor_user_id,
+        "EXPORT_LOGS",
+        "SUCCESS",
         details="Mengekspor laporan Audit Trail ke format CSV",
     )
 
-    conn = get_db_connection()
-    rows = conn.execute(
-        """
-        SELECT a.log_id, a.timestamp, COALESCE(u.username, 'UNKNOWN') as actor,
-               COALESCE(u.role, '-') as role, a.action, a.doc_id, a.status_result, a.details
-        FROM audit_logs a
-        LEFT JOIN users u ON a.user_id = u.user_id
-        ORDER BY a.log_id DESC
-        """
-    ).fetchall()
-    conn.close()
+    with db_session() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.log_id, a.timestamp, COALESCE(u.username, 'UNKNOWN') AS actor,
+                   COALESCE(u.role, '-') AS role, a.action, a.doc_id, a.status_result, a.details
+            FROM audit_logs a
+            LEFT JOIN users u ON a.user_id = u.user_id
+            ORDER BY a.log_id DESC
+            """
+        ).fetchall()
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
         ["log_id", "timestamp", "username", "role", "action", "doc_id", "status_result", "details"]
     )
-    for r in rows:
-        writer.writerow(
-            [
-                r["log_id"],
-                r["timestamp"],
-                r["actor"],
-                r["role"],
-                r["action"],
-                r["doc_id"] if r["doc_id"] is not None else "",
-                r["status_result"],
-                r["details"],
-            ]
-        )
+    writer.writerows(
+        [
+            r["log_id"],
+            r["timestamp"],
+            r["actor"],
+            r["role"],
+            r["action"],
+            "" if r["doc_id"] is None else r["doc_id"],
+            r["status_result"],
+            r["details"],
+        ]
+        for r in rows
+    )
 
     csv_content = buffer.getvalue()
-    if output_path:
-        out = Path(output_path)
+    if output_path and (out := Path(output_path)):
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(csv_content, encoding="utf-8")
 
