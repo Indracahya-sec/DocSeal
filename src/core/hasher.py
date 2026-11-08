@@ -1,16 +1,35 @@
-from collections import Counter
 import hashlib
+import os
+from collections import Counter
 from pathlib import Path
 from typing import Any
-from src.database.connection import db_session
+
+from src.config import MAX_FILE_SIZE, PDF_MAGIC_HEADER
 from src.core.audit import log_action
+from src.database.connection import db_session
+
+
+def validate_pdf_stream(file_obj: Any, max_size: int = MAX_FILE_SIZE) -> None:
+    """Memverifikasi magic bytes %PDF- dan batas ukuran file untuk mencegah upload berbahaya & DoS memori."""
+    file_obj.seek(0)
+    header = file_obj.read(5)
+    file_obj.seek(0, os.SEEK_END)
+    size = file_obj.tell()
+    file_obj.seek(0)
+
+    if header != PDF_MAGIC_HEADER:
+        raise ValueError("Berkas ditolak! Header 5-byte pertama bukan dokumen PDF valid (%PDF-).")
+    if size > max_size:
+        raise ValueError(f"Ukuran berkas ({size} bytes) melebihi batas keamanan maksimum ({max_size} bytes).")
 
 
 def calculate_sha256(file_path: str | Path) -> str:
-    """Menghitung fingerprint SHA-256 file secara bertahap (chunk 4KB)."""
+    """Menghitung fingerprint SHA-256 per 4KB chunk dengan batas ukuran anti-DoS."""
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"Berkas tidak ditemukan: {path}")
+    if path.stat().st_size > MAX_FILE_SIZE:
+        raise ValueError("Ukuran berkas melebihi batas keamanan maksimum.")
 
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -22,7 +41,7 @@ def calculate_sha256(file_path: str | Path) -> str:
 def register_document(
     file_path: str | Path, doc_name: str, user_id: int
 ) -> dict[str, Any]:
-    """Mendaftarkan dokumen ke database sekaligus menangani deduplikasi dan auto-versioning."""
+    """Mendaftarkan dokumen ke database sekaligus mencegah duplikasi isi dan mengatur versi otomatis."""
     file_hash = calculate_sha256(file_path)
 
     with db_session() as conn:
@@ -75,7 +94,7 @@ def register_document(
 def verify_document_integrity(
     doc_id: int, target_file_path: str | Path, user_id: int
 ) -> dict[str, Any]:
-    """Membandingkan hash file saat ini dengan hash asli di database."""
+    """Membandingkan hash SHA-256 file uji terhadap referensi database untuk mendeteksi modifikasi."""
     with db_session() as conn:
         if not (doc := conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()):
             raise ValueError(f"Dokumen dengan ID {doc_id} tidak ditemukan di database.")
@@ -104,7 +123,7 @@ def verify_document_integrity(
 
 
 def _inspect_doc_row(doc: Any) -> dict[str, Any]:
-    """Memeriksa keberadaan dan kecocokan hash satu baris dokumen di disk."""
+    """Memeriksa eksistensi dan kecocokan hash satu berkas dokumen di media penyimpanan."""
     fpath, expected = Path(doc["file_path"]), doc["sha256_hash"]
     if not fpath.exists():
         current, status = "-", "MISSING"
@@ -124,7 +143,7 @@ def _inspect_doc_row(doc: Any) -> dict[str, Any]:
 
 
 def scan_all_documents_integrity(user_id: int) -> dict[str, Any]:
-    """Memindai integritas seluruh berkas dokumen terdaftar secara otomatis (Batch Scan)."""
+    """Memindai keutuhan seluruh arsip terdaftar untuk mendeteksi manipulasi langsung di disk."""
     with db_session() as conn:
         docs = conn.execute("SELECT * FROM documents ORDER BY doc_id ASC").fetchall()
 

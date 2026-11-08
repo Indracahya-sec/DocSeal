@@ -1,6 +1,7 @@
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-import sqlite3
+
 from src.config import DB_PATH, ensure_directories
 
 

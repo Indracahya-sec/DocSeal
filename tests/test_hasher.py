@@ -1,11 +1,12 @@
-import pytest
 from pathlib import Path
-from src.database.seed import seed_database
+
+import pytest
+
 from src.core.hasher import (
-    calculate_sha256,
     register_document,
     verify_document_integrity,
 )
+from src.database.seed import seed_database
 
 
 @pytest.fixture

@@ -1,28 +1,63 @@
+import os
+import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
-import os
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, Response, flash, redirect, render_template, request, send_file, session, url_for
+from flask import (
+    Flask,
+    Response,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    session,
+    url_for,
+)
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
-from src.config import DATA_DIR, DUMMY_DIR, ENCRYPTED_DIR, SECRET_KEY, ensure_directories
+from src.config import (
+    DATA_DIR,
+    DUMMY_DIR,
+    ENCRYPTED_DIR,
+    MAX_FILE_SIZE,
+    SECRET_KEY,
+    ensure_directories,
+    resolve_safe_path,
+)
 from src.core.audit import export_audit_logs_csv, log_action
 from src.core.crypto import decrypt_document, encrypt_document
-from src.core.hasher import register_document, scan_all_documents_integrity, verify_document_integrity
-from src.core.rbac import authenticate_user, create_user, has_permission, is_account_locked, list_users
+from src.core.hasher import (
+    register_document,
+    scan_all_documents_integrity,
+    validate_pdf_stream,
+    verify_document_integrity,
+)
+from src.core.rbac import (
+    authenticate_user,
+    create_user,
+    has_permission,
+    is_account_locked,
+    list_users,
+)
 from src.database.connection import db_session
 from tests.generate_dummy import create_custom_pdf
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+app.config.update(
+    MAX_CONTENT_LENGTH=MAX_FILE_SIZE,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 
 def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Decorator untuk memastikan pengguna sudah login."""
+    """Decorator untuk memastikan sesi pengguna sudah terautentikasi."""
     @wraps(f)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         return f(*args, **kwargs) if "user_id" in session else redirect(url_for("login"))
@@ -30,7 +65,7 @@ def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def require_perm(*perms: str, action: str, denied_msg: str) -> Callable[..., Any]:
-    """Decorator gabungan autentikasi sesi, pemeriksaan RBAC, dan pencatatan ACCESS_DENIED."""
+    """Decorator pembatas izin RBAC dan pencatat pelanggaran akses (ACCESS_DENIED)."""
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(f)
         @login_required
@@ -52,9 +87,11 @@ def require_perm(*perms: str, action: str, denied_msg: str) -> Callable[..., Any
 
 @contextmanager
 def _saved_temp_upload(file_storage: FileStorage, prefix: str) -> Iterator[Path]:
-    """Menyimpan file unggahan sementara dan menghapusnya otomatis setelah selesai diproses."""
+    """Memvalidasi header PDF & ukuran file, menyimpan sementara di data/, dan menghapusnya otomatis."""
     ensure_directories()
-    temp_path = DATA_DIR / f"{prefix}_{os.getpid()}_{secure_filename(file_storage.filename or 'file')}"
+    validate_pdf_stream(file_storage.stream, max_size=MAX_FILE_SIZE)
+    clean_name = secure_filename(Path(file_storage.filename or "dokumen.pdf").name) or "dokumen.pdf"
+    temp_path = resolve_safe_path(f"{prefix}_{os.getpid()}_{clean_name}", target_dir=DATA_DIR, root_dir=DATA_DIR)
     file_storage.save(temp_path)
     try:
         yield temp_path
@@ -102,7 +139,7 @@ def _render_dashboard(**extra: Any) -> str:
 
 
 def _resolve_encrypted_seal(doc_id: int, unencrypted_msg: str) -> tuple[Any, Path] | None:
-    """Mengambil metadata dokumen terenkripsi beserta lokasi fisik file .seal."""
+    """Mengambil metadata dokumen terenkripsi beserta lokasi fisik file .seal yang tervalidasi."""
     with db_session() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
 
@@ -110,7 +147,8 @@ def _resolve_encrypted_seal(doc_id: int, unencrypted_msg: str) -> tuple[Any, Pat
         flash(unencrypted_msg, "warning")
         return None
 
-    seal_path = ENCRYPTED_DIR / f"{Path(doc['file_path']).stem}_v{doc['version']}.seal"
+    seal_name = f"{Path(doc['file_path']).stem}_v{doc['version']}.seal"
+    seal_path = resolve_safe_path(seal_name, target_dir=ENCRYPTED_DIR, root_dir=DATA_DIR)
     if not seal_path.exists():
         flash("File fisik .seal tidak ditemukan di server lokal.", "danger")
         return None
@@ -162,14 +200,19 @@ def generate_dummy_route() -> Any:
         flash("Nama dokumen dan isi teks dokumen wajib diisi!", "warning")
         return redirect(url_for("dashboard"))
 
-    pdf_path = create_custom_pdf(filename=doc_name, content=content, output_dir=DUMMY_DIR)
+    try:
+        pdf_path = create_custom_pdf(filename=doc_name, content=content, output_dir=DUMMY_DIR)
+    except ValueError as exc:
+        flash(f"Gagal membuat PDF dummy: {exc}", "danger")
+        return redirect(url_for("dashboard"))
+
     log_action(session["user_id"], "GENERATE_DUMMY", "SUCCESS", details=f"Membuat berkas PDF dummy kustom: {pdf_path.name}")
 
     if mode == "download":
         return send_file(pdf_path, as_attachment=True, download_name=pdf_path.name)
 
     if mode == "register":
-        entity = Path(doc_name).stem.strip().replace(" ", "_") or "Dokumen_Dummy"
+        entity = Path(pdf_path.name).stem or "Dokumen_Dummy"
         res = register_document(pdf_path, entity, session["user_id"])
         if res["status"] == "DUPLICATE":
             flash(f"[DUPLIKAT DITOLAK] {res['message']}", "danger")
@@ -191,17 +234,21 @@ def upload() -> Any:
         flash("Nama dokumen dan berkas wajib diisi!", "warning")
         return redirect(url_for("dashboard"))
 
-    with _saved_temp_upload(uploaded, "temp_upload") as temp_upload:
-        res = register_document(temp_upload, doc_name, session["user_id"])
-        if res["status"] == "DUPLICATE":
-            flash(f"[DUPLIKAT DITOLAK] {res['message']}", "danger")
-        else:
-            ext = Path(secure_filename(uploaded.filename)).suffix or ".pdf"
-            final_path = DUMMY_DIR / f"{secure_filename(doc_name) or 'Dokumen'}_v{res['version']}{ext}"
-            temp_upload.replace(final_path)
-            with db_session() as conn:
-                conn.execute("UPDATE documents SET file_path = ? WHERE doc_id = ?", (str(final_path), res["doc_id"]))
-            flash(f"[{res['status']}] {res['message']} | SHA-256: {res['sha256'][:16]}...", "success")
+    try:
+        with _saved_temp_upload(uploaded, "temp_upload") as temp_upload:
+            res = register_document(temp_upload, doc_name, session["user_id"])
+            if res["status"] == "DUPLICATE":
+                flash(f"[DUPLIKAT DITOLAK] {res['message']}", "danger")
+            else:
+                ext = Path(secure_filename(Path(uploaded.filename).name)).suffix or ".pdf"
+                final_name = f"{secure_filename(Path(doc_name).name) or 'Dokumen'}_v{res['version']}{ext}"
+                final_path = resolve_safe_path(final_name, target_dir=DUMMY_DIR, root_dir=DATA_DIR)
+                temp_upload.replace(final_path)
+                with db_session() as conn:
+                    conn.execute("UPDATE documents SET file_path = ? WHERE doc_id = ?", (str(final_path), res["doc_id"]))
+                flash(f"[{res['status']}] {res['message']} | SHA-256: {res['sha256'][:16]}...", "success")
+    except (ValueError, FileNotFoundError, sqlite3.Error) as exc:
+        flash(f"[VALIDASI KEAMANAN] {exc}", "danger")
 
     return redirect(url_for("dashboard"))
 
@@ -216,8 +263,12 @@ def verify() -> Any:
         flash("Pilih dokumen acuan dan unggah berkas yang ingin diuji!", "warning")
         return redirect(url_for("dashboard"))
 
-    with _saved_temp_upload(test_file, "temp_verify") as temp_path:
-        verify_res = verify_document_integrity(doc_id, temp_path, session["user_id"])
+    try:
+        with _saved_temp_upload(test_file, "temp_verify") as temp_path:
+            verify_res = verify_document_integrity(doc_id, temp_path, session["user_id"])
+    except (ValueError, FileNotFoundError, sqlite3.Error) as exc:
+        flash(f"[VALIDASI KEAMANAN] {exc}", "danger")
+        return redirect(url_for("dashboard"))
 
     return _render_dashboard(verify_result=verify_res)
 
@@ -251,7 +302,7 @@ def encrypt_route() -> Any:
     try:
         res = encrypt_document(doc_id, passphrase, session["user_id"])
         flash(f"[AES-256-GCM] {res['message']}", "success")
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, FileNotFoundError, sqlite3.Error) as exc:
         flash(f"Gagal enkripsi: {exc}", "danger")
 
     return redirect(url_for("dashboard"))
@@ -272,13 +323,13 @@ def decrypt_route() -> Any:
 
     doc, seal_path = resolved
     ext = Path(doc["file_path"]).suffix or ".pdf"
-    decrypted_filename = f"Decrypted_{doc['doc_name']}_v{doc['version']}{ext}"
-    output_path = DUMMY_DIR / decrypted_filename
+    decrypted_filename = f"Decrypted_{Path(doc['doc_name']).name}_v{doc['version']}{ext}"
+    output_path = resolve_safe_path(decrypted_filename, target_dir=DUMMY_DIR, root_dir=DATA_DIR)
 
     try:
         decrypt_document(seal_path, passphrase, output_path, session["user_id"], doc_id=doc_id)
-        return send_file(output_path, as_attachment=True, download_name=decrypted_filename)
-    except (ValueError, FileNotFoundError) as exc:
+        return send_file(output_path, as_attachment=True, download_name=output_path.name)
+    except (ValueError, FileNotFoundError, sqlite3.Error) as exc:
         flash(f"[AES-256-GCM] {exc}", "danger")
         return redirect(url_for("dashboard"))
 
@@ -294,7 +345,7 @@ def create_user_route() -> Any:
             session["user_id"],
         )
         flash(f"[RBAC] {res['message']}", "success")
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error) as exc:
         flash(f"Gagal membuat pengguna: {exc}", "danger")
 
     return redirect(url_for("dashboard"))

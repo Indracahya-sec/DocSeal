@@ -2,9 +2,11 @@ import argparse
 import re
 import shutil
 from pathlib import Path
+
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from src.config import DUMMY_DIR, ensure_directories
+
+from src.config import DUMMY_DIR, ensure_directories, resolve_safe_path
 
 
 def _safe_latin1(text: str) -> str:
@@ -64,7 +66,7 @@ def create_custom_pdf(
 
     pdf.multi_cell(0, 8, _safe_latin1(normalized_content))
 
-    output_path = target_dir / safe_filename
+    output_path = resolve_safe_path(safe_filename, target_dir=target_dir, root_dir=target_dir)
     pdf.output(str(output_path))
     print(f"[+] Berhasil membuat PDF Dummy: {output_path}")
     return output_path

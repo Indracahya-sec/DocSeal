@@ -1,6 +1,6 @@
+from src.core.rbac import hash_password
 from src.database.connection import db_session
 from src.database.models import init_db
-from src.core.rbac import hash_password
 
 DEFAULT_USERS = (
     ("admin", "admin123", "admin"),

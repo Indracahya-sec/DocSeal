@@ -1,12 +1,25 @@
 import io
 import sqlite3
-import pytest
 from pathlib import Path
+
+import pytest
+
+from src.config import resolve_safe_path
+from src.core.audit import export_audit_logs_csv
+from src.core.hasher import (
+    register_document,
+    scan_all_documents_integrity,
+    validate_pdf_stream,
+)
+from src.core.rbac import (
+    authenticate_user,
+    create_user,
+    has_permission,
+    is_account_locked,
+    list_users,
+)
 from src.database.connection import get_db_connection
 from src.database.seed import seed_database
-from src.core.audit import export_audit_logs_csv
-from src.core.rbac import authenticate_user, has_permission, create_user, list_users, is_account_locked
-from src.core.hasher import register_document, scan_all_documents_integrity
 from src.web.app import app
 from tests.generate_dummy import create_custom_pdf
 
@@ -31,7 +44,6 @@ def full_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_rbac_authentication_and_user_management(full_env: Path):
-    # 1. Uji autentikasi berhasil dan gagal
     admin = authenticate_user("admin", "admin123")
     assert admin is not None
     assert admin["role"] == "admin"
@@ -39,7 +51,6 @@ def test_rbac_authentication_and_user_management(full_env: Path):
     failed = authenticate_user("admin", "password_salah")
     assert failed is None
 
-    # 2. Uji matriks izin 4 role
     assert has_permission("admin", "MANAGE_USERS") is True
     assert has_permission("operator", "UPLOAD") is True
     assert has_permission("operator", "MANAGE_USERS") is False
@@ -48,25 +59,21 @@ def test_rbac_authentication_and_user_management(full_env: Path):
     assert has_permission("auditor", "VIEW_LOGS") is True
     assert has_permission("auditor", "DECRYPT") is False
 
-    # 3. Uji pembuatan user baru oleh Admin
     new_u = create_user("staf_baru", "rahasia123", "staf", actor_user_id=admin["user_id"])
     assert new_u["username"] == "staf_baru"
     assert len(list_users()) == 5
 
-    # Duplikat username wajib ditolak
     with pytest.raises(ValueError, match="sudah terdaftar"):
         create_user("staf_baru", "rahasia123", "staf", actor_user_id=admin["user_id"])
 
 
 def test_immutable_audit_log_triggers(full_env: Path):
-    # Buat satu entri log lewat autentikasi
     authenticate_user("staf", "staf123")
 
     conn = get_db_connection()
     row = conn.execute("SELECT log_id FROM audit_logs LIMIT 1").fetchone()
     assert row is not None
 
-    # Upaya UPDATE dan DELETE pada audit_logs wajib diblokir oleh SQLite Trigger
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         conn.execute("UPDATE audit_logs SET action = 'HACKED' WHERE log_id = ?", (row["log_id"],))
 
@@ -78,39 +85,37 @@ def test_immutable_audit_log_triggers(full_env: Path):
 def test_web_ui_versioning_encrypt_decrypt_and_rbac(full_env: Path):
     client = app.test_client()
 
-    # 1. Login sebagai Operator
     res_login = client.post("/login", data={"username": "operator", "password": "operator123"}, follow_redirects=True)
     assert res_login.status_code == 200
 
-    # 2. Upload v1 dan v2 dengan nama file fisik yang SAMA (memastikan v1 tidak tertimpa oleh v2)
+    pdf_v1 = b"%PDF-1.4 ISI_VERSI_1"
+    pdf_v2 = b"%PDF-1.4 ISI_VERSI_2_REVISI"
+
     client.post(
         "/upload",
-        data={"doc_name": "Berkas_Tes", "file": (io.BytesIO(b"ISI_VERSI_1"), "berkas.pdf")},
+        data={"doc_name": "Berkas_Tes", "file": (io.BytesIO(pdf_v1), "berkas.pdf")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
     client.post(
         "/upload",
-        data={"doc_name": "Berkas_Tes", "file": (io.BytesIO(b"ISI_VERSI_2_REVISI"), "berkas.pdf")},
+        data={"doc_name": "Berkas_Tes", "file": (io.BytesIO(pdf_v2), "berkas.pdf")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
 
-    # Verifikasi bahwa v1 masih VALID terhadap b"ISI_VERSI_1" (tidak tertimpa oleh v2)
     res_ver = client.post(
         "/verify",
-        data={"doc_id": 1, "file": (io.BytesIO(b"ISI_VERSI_1"), "uji.pdf")},
+        data={"doc_id": 1, "file": (io.BytesIO(pdf_v1), "uji.pdf")},
         content_type="multipart/form-data",
     )
     assert b"VALID (DOKUMEN ASLI / UTUH)" in res_ver.data
 
-    # 3. Enkripsi dokumen v1 dan Dekripsi via Web UI
     client.post("/encrypt", data={"doc_id": 1, "passphrase": "kunci_web_123"}, follow_redirects=True)
     res_dec = client.post("/decrypt", data={"doc_id": 1, "passphrase": "kunci_web_123"})
     assert res_dec.status_code == 200
-    assert res_dec.data == b"ISI_VERSI_1"
+    assert res_dec.data == pdf_v1
 
-    # 4. Login sebagai Staf: tidak boleh bisa mengunduh .seal atau membuat user
     client.get("/logout")
     client.post("/login", data={"username": "staf", "password": "staf123"}, follow_redirects=True)
     res_seal = client.get("/download-seal/1", follow_redirects=True)
@@ -118,39 +123,33 @@ def test_web_ui_versioning_encrypt_decrypt_and_rbac(full_env: Path):
 
 
 def test_batch_scan_export_csv_and_bruteforce_lockout(full_env: Path):
-    # 1. Uji Batch Integrity Scan (kondisi normal & kondisi file dirusak langsung di disk)
     f_doc = full_env / "dummy_docs" / "arsip_penting.pdf"
-    f_doc.write_bytes(b"DATA_ARSIP_ASLI")
+    f_doc.write_bytes(b"%PDF-1.4 DATA_ARSIP_ASLI")
     register_document(f_doc, "Arsip_Penting", user_id=2)
 
     scan_ok = scan_all_documents_integrity(user_id=3)
     assert scan_ok["overall_status"] == "ALL_VALID"
     assert scan_ok["valid_count"] == 1
 
-    # Simulasi perusakan langsung di disk (Direct Disk Tampering)
-    f_doc.write_bytes(b"DATA_ARSIP_DIPALSUKAN_DI_DISK")
+    f_doc.write_bytes(b"%PDF-1.4 DATA_ARSIP_DIPALSUKAN_DI_DISK")
     scan_bad = scan_all_documents_integrity(user_id=3)
     assert scan_bad["overall_status"] == "ANOMALY_DETECTED"
     assert scan_bad["modified_count"] == 1
 
-    # 2. Uji Ekspor Audit Trail CSV
     csv_path = full_env / "audit_export.csv"
     csv_text = export_audit_logs_csv(actor_user_id=4, output_path=csv_path)
     assert csv_path.exists()
     assert "BATCH_SCAN" in csv_text
     assert "ANOMALY_DETECTED" in csv_text
 
-    # 3. Uji Proteksi Brute-Force (5x gagal login beruntun mengunci akun)
     for _ in range(5):
         assert authenticate_user("auditor", "salah_terus") is None
 
     assert is_account_locked("auditor") is True
-    # Bahkan dengan password benar pun akan ditolak saat sedang terkunci
     assert authenticate_user("auditor", "auditor123") is None
 
 
 def test_custom_dummy_pdf_generator(full_env: Path):
-    # 1. Uji pembuatan PDF dummy kustom via fungsi langsung
     out_pdf = create_custom_pdf(
         filename="Surat Tugas Tabanan",
         content="Nama: I Wayan Dummy\nKeterangan: Petugas Kloter 05",
@@ -158,9 +157,8 @@ def test_custom_dummy_pdf_generator(full_env: Path):
     )
     assert out_pdf.exists()
     assert out_pdf.name == "Surat_Tugas_Tabanan.pdf"
-    assert out_pdf.read_bytes().startswith(b"%PDF")
+    assert out_pdf.read_bytes().startswith(b"%PDF-")
 
-    # 2. Uji pembuatan & registrasi langsung via Web UI oleh Operator
     client = app.test_client()
     client.post("/login", data={"username": "operator", "password": "operator123"})
     res = client.post(
@@ -175,3 +173,22 @@ def test_custom_dummy_pdf_generator(full_env: Path):
     assert res.status_code == 200
     assert b"Rekomendasi_Paspor_01" in res.data
 
+
+def test_security_validation_pdf_header_and_path_sanitization(full_env: Path):
+    # 1. Tolak file palsu yang tidak memiliki header 5-byte %PDF-
+    fake_stream = io.BytesIO(b"MZ_FAKE_EXECUTABLE_CONTENT")
+    with pytest.raises(ValueError, match="Header 5-byte pertama bukan dokumen PDF valid"):
+        validate_pdf_stream(fake_stream)
+
+    # 2. Tolak file yang melampaui batas ukuran memori (Anti-DoS)
+    oversized_stream = io.BytesIO(b"%PDF-" + b"A" * 100)
+    with pytest.raises(ValueError, match="melebihi batas keamanan maksimum"):
+        validate_pdf_stream(oversized_stream, max_size=32)
+
+    # 3. Pastikan Path Sanitization mengisolasi file tetap di dalam direktori data/
+    safe_resolved = resolve_safe_path("../../etc/passwd.pdf", target_dir=full_env / "dummy_docs", root_dir=full_env)
+    assert safe_resolved.parent == (full_env / "dummy_docs").resolve()
+    assert safe_resolved.name == "passwd.pdf"
+
+    with pytest.raises(ValueError):
+        resolve_safe_path("..", target_dir=full_env / "dummy_docs", root_dir=full_env)

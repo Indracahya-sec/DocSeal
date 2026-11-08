@@ -1,9 +1,11 @@
 import argparse
-from collections.abc import Callable
+import sqlite3
 import sys
+from collections.abc import Callable
 from typing import Any
 
-from src.database.connection import db_session
+from cryptography.exceptions import InvalidTag
+
 from src.core.audit import export_audit_logs_csv, log_action
 from src.core.crypto import decrypt_document, encrypt_document
 from src.core.hasher import (
@@ -11,12 +13,19 @@ from src.core.hasher import (
     scan_all_documents_integrity,
     verify_document_integrity,
 )
-from src.core.rbac import ROLE_PERMISSIONS, authenticate_user, create_user, has_permission, list_users
+from src.core.rbac import (
+    ROLE_PERMISSIONS,
+    authenticate_user,
+    create_user,
+    has_permission,
+    list_users,
+)
+from src.database.connection import db_session
 from tests.generate_dummy import create_custom_pdf, interactive_prompt
 
 
 def require_auth_and_perm(username: str, password: str, action: str) -> dict[str, Any]:
-    """Memvalidasi login sekaligus mengecek izin RBAC sebelum menjalankan perintah."""
+    """Memvalidasi kredensial dan hak akses RBAC sebelum mengeksekusi sub-command CLI."""
     if not (user := authenticate_user(username, password)):
         print("[-] Autentikasi Gagal: Username atau password salah!")
         sys.exit(1)
@@ -61,7 +70,7 @@ def cmd_list() -> None:
 
 
 def cmd_logs(username: str, password: str) -> None:
-    """Menampilkan riwayat Audit Trail (Khusus Admin & Auditor)."""
+    """Menampilkan riwayat Audit Trail khusus Admin dan Auditor."""
     require_auth_and_perm(username, password, "VIEW_LOGS")
     with db_session() as conn:
         rows = conn.execute(
@@ -211,7 +220,7 @@ def main() -> None:
 
     try:
         handlers[args.command](args)
-    except Exception as exc:
+    except (ValueError, FileNotFoundError, sqlite3.Error, InvalidTag) as exc:
         print(f"[-] Error: {exc}")
         sys.exit(1)
 

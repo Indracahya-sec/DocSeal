@@ -2,8 +2,9 @@ import hashlib
 import hmac
 import secrets
 from typing import Any
-from src.database.connection import db_session
+
 from src.core.audit import log_action
+from src.database.connection import db_session
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "admin": {"UPLOAD", "VERIFY", "ENCRYPT", "DECRYPT", "VIEW_LOGS", "MANAGE_USERS"},
