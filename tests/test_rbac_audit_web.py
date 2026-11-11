@@ -35,6 +35,7 @@ def full_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr("src.database.connection.DB_PATH", test_db)
     monkeypatch.setattr("src.core.crypto.ENCRYPTED_DIR", test_enc_dir)
+    monkeypatch.setattr("src.core.audit.DATA_DIR", tmp_path)
     monkeypatch.setattr("src.web.app.DATA_DIR", tmp_path)
     monkeypatch.setattr("src.web.app.DUMMY_DIR", test_dummy_dir)
     monkeypatch.setattr("src.web.app.ENCRYPTED_DIR", test_enc_dir)
@@ -192,3 +193,39 @@ def test_security_validation_pdf_header_and_path_sanitization(full_env: Path):
 
     with pytest.raises(ValueError):
         resolve_safe_path("..", target_dir=full_env / "dummy_docs", root_dir=full_env)
+
+
+def test_partner_ready_features_password_cert_and_backup(full_env: Path):
+    sample_pdf = full_env / "dummy_docs" / "Sample_Mitra.pdf"
+    sample_pdf.write_bytes(b"%PDF-1.4 Dokumen Resmi Kemenhaj Tabanan")
+    reg = register_document(sample_pdf, "Berkas_Jamaah_Tabanan", user_id=1)
+
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "admin123"})
+
+    # 1. Cetak Berita Acara Verifikasi (PDF)
+    cert_res = client.post(
+        "/verify/certificate",
+        data={
+            "doc_id": reg["doc_id"],
+            "current_hash": reg["sha256"],
+        },
+    )
+    assert cert_res.status_code == 200
+    assert cert_res.data.startswith(b"%PDF-")
+
+    # 2. Unduh Paket Backup Sistem (.ZIP) oleh Admin
+    backup_res = client.get("/admin/backup")
+    assert backup_res.status_code == 200
+    assert backup_res.mimetype == "application/zip"
+    assert backup_res.data.startswith(b"PK")
+
+    # 3. Ganti Password Mandiri via Web UI
+    pwd_res = client.post(
+        "/users/change-password",
+        data={"old_password": "admin123", "new_password": "admin_tabanan_2026"},
+        follow_redirects=True,
+    )
+    assert pwd_res.status_code == 200
+    assert b"berhasil diperbarui" in pwd_res.data
+    assert authenticate_user("admin", "admin_tabanan_2026") is not None

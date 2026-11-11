@@ -29,7 +29,11 @@ from src.config import (
     ensure_directories,
     resolve_safe_path,
 )
-from src.core.audit import export_audit_logs_csv, log_action
+from src.core.audit import (
+    create_system_backup_zip,
+    export_audit_logs_csv,
+    log_action,
+)
 from src.core.crypto import decrypt_document, encrypt_document
 from src.core.hasher import (
     register_document,
@@ -39,13 +43,17 @@ from src.core.hasher import (
 )
 from src.core.rbac import (
     authenticate_user,
+    change_password,
     create_user,
     has_permission,
     is_account_locked,
     list_users,
 )
 from src.database.connection import db_session
-from tests.generate_dummy import create_custom_pdf
+from tests.generate_dummy import (
+    create_custom_pdf,
+    create_verification_certificate_pdf,
+)
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -273,6 +281,43 @@ def verify() -> Any:
     return _render_dashboard(verify_result=verify_res)
 
 
+@app.route("/verify/certificate", methods=["POST"])
+@require_perm("VERIFY", action="EXPORT_CERTIFICATE", denied_msg="Role Anda tidak diizinkan mencetak Berita Acara Verifikasi.")
+def download_verify_certificate_route() -> Any:
+    doc_id = request.form.get("doc_id", type=int)
+    current_hash = request.form.get("current_hash", "").strip()
+
+    if not (doc_id and current_hash):
+        flash("Data hasil verifikasi tidak lengkap untuk mencetak Berita Acara.", "warning")
+        return redirect(url_for("dashboard"))
+
+    with db_session() as conn:
+        doc = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
+
+    if not doc:
+        flash("Dokumen acuan tidak ditemukan di database.", "danger")
+        return redirect(url_for("dashboard"))
+
+    is_valid = current_hash == doc["sha256_hash"]
+    verify_payload = {
+        "doc_id": doc["doc_id"],
+        "doc_name": doc["doc_name"],
+        "version": doc["version"],
+        "is_valid": is_valid,
+        "status": "VALID" if is_valid else "MODIFIED",
+        "expected_hash": doc["sha256_hash"],
+        "current_hash": current_hash,
+    }
+    cert_path = create_verification_certificate_pdf(
+        verify_payload,
+        inspector_username=session["username"],
+        inspector_role=session["role"],
+        actor_user_id=session["user_id"],
+        output_dir=DUMMY_DIR,
+    )
+    return send_file(cert_path, as_attachment=True, download_name=cert_path.name)
+
+
 @app.route("/scan", methods=["POST"])
 @require_perm("VERIFY", action="BATCH_SCAN", denied_msg="Role Anda tidak diizinkan memindai dokumen.")
 def scan_all_route() -> str:
@@ -351,6 +396,32 @@ def create_user_route() -> Any:
     return redirect(url_for("dashboard"))
 
 
+@app.route("/users/change-password", methods=["POST"])
+@login_required
+def change_password_route() -> Any:
+    old_pass = request.form.get("old_password", "")
+    new_pass = request.form.get("new_password", "")
+
+    try:
+        res = change_password(session["user_id"], old_pass, new_pass)
+        flash(f"[KEAMANAN AKUN] {res['message']}", "success")
+    except (ValueError, sqlite3.Error) as exc:
+        flash(f"Gagal mengubah password: {exc}", "danger")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/backup")
+@require_perm("MANAGE_USERS", action="SYSTEM_BACKUP", denied_msg="Hanya Admin yang dapat mengunduh paket backup sistem.")
+def backup_system_route() -> Response:
+    zip_data = create_system_backup_zip(session["user_id"])
+    return Response(
+        zip_data,
+        mimetype="application/zip",
+        headers={"Content-Disposition": "attachment; filename=DocSeal_System_Backup.zip"},
+    )
+
+
 @app.route("/download-seal/<int:doc_id>")
 @require_perm("ENCRYPT", "DECRYPT", action="DOWNLOAD_SEAL", denied_msg="Role Anda tidak memiliki izin mengunduh arsip terenkripsi (.seal).")
 def download_seal(doc_id: int) -> Any:
@@ -360,3 +431,7 @@ def download_seal(doc_id: int) -> Any:
     _, seal_path = resolved
     log_action(session["user_id"], "DOWNLOAD_SEAL", "SUCCESS", doc_id=doc_id, details=f"Mengunduh arsip terenkripsi {seal_path.name}")
     return send_file(seal_path, as_attachment=True)
+
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=False)

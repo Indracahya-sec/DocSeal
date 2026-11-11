@@ -1,12 +1,15 @@
 import argparse
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
 from src.config import DUMMY_DIR, ensure_directories, resolve_safe_path
+from src.core.audit import log_action
 
 
 def _safe_latin1(text: str) -> str:
@@ -70,6 +73,65 @@ def create_custom_pdf(
     pdf.output(str(output_path))
     print(f"[+] Berhasil membuat PDF Dummy: {output_path}")
     return output_path
+
+
+def create_verification_certificate_pdf(
+    verify_result: dict[str, Any],
+    inspector_username: str,
+    inspector_role: str,
+    actor_user_id: int,
+    output_dir: Path | None = None,
+) -> Path:
+    """Membuat dokumen Berita Acara / Sertifikat Hasil Verifikasi SHA-256 resmi dalam format PDF."""
+    ensure_directories()
+    target_dir = output_dir if output_dir is not None else DUMMY_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S WITA")
+    status_label = (
+        "VALID (DOKUMEN ASLI / INTEGRITAS TERJAGA 100%)"
+        if verify_result["is_valid"]
+        else "MODIFIED (PERINGATAN: TERDETEKSI PERUBAHAN ISI!)"
+    )
+    cert_body = (
+        f"Nomor Dokumen Sistem : #{verify_result['doc_id']}\n"
+        f"Nama Entitas Dokumen : {verify_result['doc_name']} (Versi v{verify_result['version']})\n"
+        f"Waktu Pemeriksaan    : {timestamp_str}\n"
+        f"Petugas Pemeriksa    : {inspector_username} (Role: {inspector_role.upper()})\n\n"
+        f"HASIL VERIFIKASI KRIPTOGRAFI:\n"
+        f"Status Keaslian      : {status_label}\n"
+        f"SHA-256 Acuan (DB)   : {verify_result['expected_hash']}\n"
+        f"SHA-256 Berkas Uji   : {verify_result['current_hash']}\n\n"
+        f"KESIMPULAN AUDIT:\n"
+        + (
+            "Sidik jari digital (SHA-256) berkas yang diuji 100% IDENTIK dengan catatan resmi "
+            "pada database DocSeal. Dokumen dinyatakan sah dan tidak mengalami modifikasi."
+            if verify_result["is_valid"]
+            else "Sidik jari digital (SHA-256) berkas yang diuji TIDAK COCOK dengan database DocSeal. "
+            "Dokumen telah mengalami perubahan bit atau revisi di luar versi acuan."
+        )
+        + f"\n\n\nTabanan, {datetime.now().strftime('%d-%m-%Y')}\n"
+        f"Petugas Verifikasi Digital,\n\n\n"
+        f"({inspector_username} - {inspector_role.upper()})"
+    )
+
+    cert_name = sanitize_pdf_filename(
+        f"Berita_Acara_Verifikasi_{verify_result['doc_name']}_v{verify_result['version']}.pdf"
+    )
+    out_path = create_custom_pdf(
+        filename=cert_name,
+        content=cert_body,
+        title="BERITA ACARA VERIFIKASI INTEGRITAS DOKUMEN DIGITAL (DOCSEAL)",
+        output_dir=target_dir,
+    )
+    log_action(
+        actor_user_id,
+        "EXPORT_CERTIFICATE",
+        verify_result["status"],
+        doc_id=verify_result["doc_id"],
+        details=f"Mencetak Berita Acara Verifikasi PDF: {out_path.name}",
+    )
+    return out_path
 
 
 def create_pdf(filename: str, nama: str, nik: str, porsi: str, alamat: str) -> Path:

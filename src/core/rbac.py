@@ -136,3 +136,44 @@ def create_user(
         "role": clean_role,
         "message": f"Akun '{clean_user}' ({clean_role}) berhasil dibuat.",
     }
+
+
+def change_password(user_id: int, old_password: str, new_password: str) -> dict[str, Any]:
+    """Mengubah password pengguna setelah memverifikasi password lama dengan proteksi timing attack."""
+    if len(new_password) < 4:
+        raise ValueError("Password baru minimal harus terdiri dari 4 karakter.")
+
+    with db_session() as conn:
+        user = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        if not user:
+            raise ValueError("Akun pengguna tidak ditemukan.")
+
+        if not verify_password(user["password_hash"], old_password):
+            invalid_old = True
+        else:
+            invalid_old = False
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE user_id = ?",
+                (hash_password(new_password), user_id),
+            )
+
+    if invalid_old:
+        log_action(
+            user_id,
+            "CHANGE_PASSWORD",
+            "FAILED_WRONG_PASSWORD",
+            details=f"Gagal ganti password untuk '{user['username']}': Password lama tidak cocok",
+        )
+        raise ValueError("Password lama yang dimasukkan salah.")
+
+    log_action(
+        user_id,
+        "CHANGE_PASSWORD",
+        "SUCCESS",
+        details=f"Password akun '{user['username']}' berhasil diperbarui",
+    )
+    return {
+        "user_id": user_id,
+        "username": user["username"],
+        "message": f"Password untuk akun '{user['username']}' berhasil diperbarui.",
+    }

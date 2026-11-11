@@ -6,7 +6,11 @@ from typing import Any
 
 from cryptography.exceptions import InvalidTag
 
-from src.core.audit import export_audit_logs_csv, log_action
+from src.core.audit import (
+    create_system_backup_zip,
+    export_audit_logs_csv,
+    log_action,
+)
 from src.core.crypto import decrypt_document, encrypt_document
 from src.core.hasher import (
     register_document,
@@ -16,12 +20,17 @@ from src.core.hasher import (
 from src.core.rbac import (
     ROLE_PERMISSIONS,
     authenticate_user,
+    change_password,
     create_user,
     has_permission,
     list_users,
 )
 from src.database.connection import db_session
-from tests.generate_dummy import create_custom_pdf, interactive_prompt
+from tests.generate_dummy import (
+    create_custom_pdf,
+    create_verification_certificate_pdf,
+    interactive_prompt,
+)
 
 
 def require_auth_and_perm(username: str, password: str, action: str) -> dict[str, Any]:
@@ -111,6 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ver = auth_sub("verify", "Verifikasi keaslian file terhadap hash database")
     ver.add_argument("-i", "--id", type=int, required=True, help="ID Dokumen (doc_id)")
     ver.add_argument("-f", "--file", required=True, help="Path file fisik yang ingin diuji")
+    ver.add_argument("--cert", action="store_true", help="Sekaligus cetak Berita Acara Verifikasi (PDF)")
 
     enc = auth_sub("encrypt", "Enkripsi dokumen menjadi file .seal (AES-256-GCM)")
     enc.add_argument("-i", "--id", type=int, required=True, help="ID Dokumen (doc_id)")
@@ -135,6 +145,12 @@ def _build_parser() -> argparse.ArgumentParser:
     el = auth_sub("export-logs", "Ekspor laporan Audit Trail ke file CSV (Khusus Admin/Auditor)")
     el.add_argument("-o", "--output", default="data/DocSeal_Audit_Trail.csv", help="Path file CSV output")
 
+    cp = auth_sub("change-password", "Ganti password akun pengguna")
+    cp.add_argument("--new-pass", required=True, help="Password baru (minimal 4 karakter)")
+
+    bk = auth_sub("backup", "Buat paket backup sistem .zip (Khusus Admin)")
+    bk.add_argument("-o", "--output", default="data/DocSeal_System_Backup.zip", help="Path file .zip backup")
+
     md = subs.add_parser("make-dummy", help="Buat file PDF dummy dengan nama dan isi kustom")
     md.add_argument("-n", "--name", help="Nama file dokumen")
     md.add_argument("-i", "--isi", dest="content", help="Isi teks di dalam PDF")
@@ -158,6 +174,14 @@ def _handle_verify(args: argparse.Namespace) -> None:
         f"Hash Database : {res['expected_hash']}\n"
         f"Hash File Ini : {res['current_hash']}"
     )
+    if args.cert:
+        cert = create_verification_certificate_pdf(
+            res,
+            inspector_username=user["username"],
+            inspector_role=user["role"],
+            actor_user_id=user["user_id"],
+        )
+        print(f"[+] Berita Acara Verifikasi PDF diterbitkan: {cert}")
 
 
 def _handle_encrypt(args: argparse.Namespace) -> None:
@@ -202,6 +226,20 @@ def _handle_export_logs(args: argparse.Namespace) -> None:
     print(f"[+] Laporan Audit Trail berhasil diekspor ke: {args.output}")
 
 
+def _handle_change_password(args: argparse.Namespace) -> None:
+    if not (user := authenticate_user(args.user, args.password)):
+        print("[-] Autentikasi Gagal: Username atau password lama salah!")
+        sys.exit(1)
+    res = change_password(user["user_id"], args.password, args.new_pass)
+    print(f"[+] {res['message']}")
+
+
+def _handle_backup(args: argparse.Namespace) -> None:
+    admin = require_auth_and_perm(args.user, args.password, "MANAGE_USERS")
+    create_system_backup_zip(admin["user_id"], output_path=args.output)
+    print(f"[+] Paket backup sistem berhasil disimpan di: {args.output}")
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     handlers: dict[str, Callable[[argparse.Namespace], None]] = {
@@ -215,6 +253,8 @@ def main() -> None:
         "users": _handle_users,
         "scan": _handle_scan,
         "export-logs": _handle_export_logs,
+        "change-password": _handle_change_password,
+        "backup": _handle_backup,
         "make-dummy": lambda a: create_custom_pdf(a.name, a.content) if (a.name and a.content) else interactive_prompt(),
     }
 

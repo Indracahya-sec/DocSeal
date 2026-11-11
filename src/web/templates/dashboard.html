@@ -34,9 +34,12 @@
 <body>
     <header>
         <div>
-            <strong>DocSeal</strong> | Proteksi & Verifikasi Integritas Dokumen (On-Premise)
+            <strong>DocSeal</strong> | Kantor Kementerian Haji dan Umrah Kabupaten Tabanan (Sistem Keamanan Dokumen On-Premise)
         </div>
         <div>
+            {% if session['role'] == 'admin' %}
+                <a href="{{ url_for('backup_system_route') }}" style="background: #0284c7; color: white; text-decoration: none; padding: 0.35rem 0.75rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; margin-right: 0.75rem;">Backup Sistem (.ZIP)</a>
+            {% endif %}
             User: <strong>{{ session['username'] }}</strong>
             <span class="badge-role">{{ session['role'] }}</span>
             <a href="{{ url_for('logout') }}" class="logout">Logout</a>
@@ -52,9 +55,22 @@
 
         {% if verify_result %}
             <div class="{{ 'valid-box' if verify_result.is_valid else 'mod-box' }}">
-                <h3 style="color: white; border: none; margin: 0 0 0.5rem 0;">
-                    Hasil Verifikasi SHA-256: {{ 'VALID (DOKUMEN ASLI / UTUH)' if verify_result.is_valid else 'MODIFIED (PERINGATAN: ISI DOKUMEN TELAH BERUBAH!)' }}
-                </h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                    <h3 style="color: white; border: none; margin: 0 0 0.5rem 0;">
+                        Hasil Verifikasi SHA-256: {{ 'VALID (DOKUMEN ASLI / UTUH)' if verify_result.is_valid else 'MODIFIED (PERINGATAN: ISI DOKUMEN TELAH BERUBAH!)' }}
+                    </h3>
+                    <form method="POST" action="{{ url_for('download_verify_certificate_route') }}" style="margin: 0;">
+                        <input type="hidden" name="doc_id" value="{{ verify_result.doc_id }}">
+                        <input type="hidden" name="doc_name" value="{{ verify_result.doc_name }}">
+                        <input type="hidden" name="version" value="{{ verify_result.version }}">
+                        <input type="hidden" name="expected_hash" value="{{ verify_result.expected_hash }}">
+                        <input type="hidden" name="current_hash" value="{{ verify_result.current_hash }}">
+                        <input type="hidden" name="status" value="{{ verify_result.status }}">
+                        <button type="submit" style="background: #f8fafc; color: #0f172a; padding: 0.45rem 0.9rem; font-size: 0.82rem;">
+                            Cetak Berita Acara Verifikasi (PDF)
+                        </button>
+                    </form>
+                </div>
                 <div><strong>Dokumen Acuan:</strong> {{ verify_result.doc_name }} (v{{ verify_result.version }})</div>
                 <div><strong>SHA-256 Database :</strong> <code>{{ verify_result.expected_hash }}</code></div>
                 <div><strong>SHA-256 File Uji :</strong> <code>{{ verify_result.current_hash }}</code></div>
@@ -198,6 +214,17 @@
                 </form>
             </div>
             {% endif %}
+
+            <div class="card">
+                <h3>Keamanan Akun (Ganti Password)</h3>
+                <form method="POST" action="{{ url_for('change_password_route') }}">
+                    <label>Password Saat Ini</label>
+                    <input type="password" name="old_password" required placeholder="Masukkan password lama">
+                    <label>Password Baru</label>
+                    <input type="password" name="new_password" required placeholder="Minimal 4 karakter">
+                    <button type="submit" style="background: #475569;">Perbarui Password Saya</button>
+                </form>
+            </div>
         </div>
 
         <div class="card">

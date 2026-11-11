@@ -1,7 +1,9 @@
 import csv
 import io
+import zipfile
 from pathlib import Path
 
+from src.config import DATA_DIR, resolve_safe_path
 from src.database.connection import db_session
 
 
@@ -67,3 +69,31 @@ def export_audit_logs_csv(
         out.write_text(csv_content, encoding="utf-8")
 
     return csv_content
+
+
+def create_system_backup_zip(
+    actor_user_id: int, output_path: str | Path | None = None
+) -> bytes:
+    """Membuat arsip cadangan (.zip) berisi database SQLite, berkas PDF, dan arsip .seal."""
+    buffer = io.BytesIO()
+    allowed_exts = {".db", ".pdf", ".seal", ".csv"}
+    bundled_count = 0
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in sorted(DATA_DIR.rglob("*")):
+            if item.is_file() and item.suffix.lower() in allowed_exts and not item.name.startswith("temp_"):
+                zf.write(item, arcname=str(item.relative_to(DATA_DIR)))
+                bundled_count += 1
+
+    zip_bytes = buffer.getvalue()
+    if output_path:
+        safe_out = resolve_safe_path(Path(output_path).name, target_dir=DATA_DIR, root_dir=DATA_DIR)
+        safe_out.write_bytes(zip_bytes)
+
+    log_action(
+        actor_user_id,
+        "SYSTEM_BACKUP",
+        "SUCCESS",
+        details=f"Membuat paket backup sistem (.zip) berisi {bundled_count} berkas data",
+    )
+    return zip_bytes

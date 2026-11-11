@@ -8,5 +8,6 @@ data/encrypted/*.seal
 data/temp_verify_*
 data/temp_upload_*
 data/*.csv
+data/*.zip
 AGENTS.md
 SKILL.md
