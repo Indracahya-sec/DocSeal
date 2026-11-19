@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
@@ -285,21 +286,20 @@ def verify() -> Any:
 @require_perm("VERIFY", action="EXPORT_CERTIFICATE", denied_msg="Role Anda tidak diizinkan mencetak Berita Acara Verifikasi.")
 def download_verify_certificate_route() -> Any:
     doc_id = request.form.get("doc_id", type=int)
-    current_hash = request.form.get("current_hash", "").strip()
+    current_hash = request.form.get("current_hash", "").strip().lower()
 
-    if not (doc_id and current_hash):
-        flash("Data hasil verifikasi tidak lengkap untuk mencetak Berita Acara.", "warning")
+    if not (doc_id and len(current_hash) == 64 and all(c in "0123456789abcdef" for c in current_hash)):
+        flash("Data hasil verifikasi tidak valid untuk mencetak Berita Acara.", "warning")
         return redirect(url_for("dashboard"))
 
     with db_session() as conn:
-        doc = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
-
+        doc = conn.execute("SELECT doc_id, doc_name, version, sha256_hash FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
     if not doc:
         flash("Dokumen acuan tidak ditemukan di database.", "danger")
         return redirect(url_for("dashboard"))
 
     is_valid = current_hash == doc["sha256_hash"]
-    verify_payload = {
+    payload = {
         "doc_id": doc["doc_id"],
         "doc_name": doc["doc_name"],
         "version": doc["version"],
@@ -308,14 +308,19 @@ def download_verify_certificate_route() -> Any:
         "expected_hash": doc["sha256_hash"],
         "current_hash": current_hash,
     }
-    cert_path = create_verification_certificate_pdf(
-        verify_payload,
-        inspector_username=session["username"],
-        inspector_role=session["role"],
-        actor_user_id=session["user_id"],
-        output_dir=DUMMY_DIR,
-    )
-    return send_file(cert_path, as_attachment=True, download_name=cert_path.name)
+    with tempfile.TemporaryDirectory() as tmp:
+        cert_path = create_verification_certificate_pdf(
+            payload,
+            inspector_username=session["username"],
+            inspector_role=session["role"],
+            actor_user_id=session["user_id"],
+            output_dir=Path(tmp),
+        )
+        return Response(
+            cert_path.read_bytes(),
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={cert_path.name}"},
+        )
 
 
 @app.route("/scan", methods=["POST"])

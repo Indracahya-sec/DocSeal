@@ -3,7 +3,7 @@ import io
 import zipfile
 from pathlib import Path
 
-from src.config import DATA_DIR, resolve_safe_path
+from src.config import DATA_DIR
 from src.database.connection import db_session
 
 
@@ -87,8 +87,9 @@ def create_system_backup_zip(
 
     zip_bytes = buffer.getvalue()
     if output_path:
-        safe_out = resolve_safe_path(Path(output_path).name, target_dir=DATA_DIR, root_dir=DATA_DIR)
-        safe_out.write_bytes(zip_bytes)
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(zip_bytes)
 
     log_action(
         actor_user_id,

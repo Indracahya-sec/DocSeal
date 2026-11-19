@@ -220,7 +220,14 @@ def test_partner_ready_features_password_cert_and_backup(full_env: Path):
     assert backup_res.mimetype == "application/zip"
     assert backup_res.data.startswith(b"PK")
 
-    # 3. Ganti Password Mandiri via Web UI
+    # 3. Ganti Password Mandiri via Web UI & tolak password lama yang salah
+    bad_pwd = client.post(
+        "/users/change-password",
+        data={"old_password": "salah", "new_password": "admin_tabanan_2026"},
+        follow_redirects=True,
+    )
+    assert b"Password lama yang dimasukkan salah" in bad_pwd.data
+
     pwd_res = client.post(
         "/users/change-password",
         data={"old_password": "admin123", "new_password": "admin_tabanan_2026"},
@@ -229,3 +236,10 @@ def test_partner_ready_features_password_cert_and_backup(full_env: Path):
     assert pwd_res.status_code == 200
     assert b"berhasil diperbarui" in pwd_res.data
     assert authenticate_user("admin", "admin_tabanan_2026") is not None
+
+    # 4. Non-admin ditolak mengakses backup sistem & hash sertifikat tidak valid ditolak
+    client.post("/login", data={"username": "staf", "password": "staf123"})
+    denied_backup = client.get("/admin/backup", follow_redirects=True)
+    assert b"Hanya Admin" in denied_backup.data
+    bad_cert = client.post("/verify/certificate", data={"doc_id": reg["doc_id"], "current_hash": "bukan-hash"})
+    assert bad_cert.status_code == 302
