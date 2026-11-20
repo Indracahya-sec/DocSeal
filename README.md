@@ -45,6 +45,7 @@ Proyek ini dikembangkan untuk mata kuliah **Applied Cyber Security** dengan impl
 ```text
 DocSeal/
 ├── main.py                              # Entry point utama Server Web UI Lokal
+├── docseal                              # Wrapper CLI singkat (./docseal <command>)
 ├── Start_DocSeal.bat                    # Launcher 1-klik untuk komputer Windows mitra
 ├── start_docseal.sh                     # Launcher 1-klik untuk komputer Linux/macOS
 ├── run_demo.py                          # Skrip simulasi otomatis end-to-end (1-click demo)
@@ -137,41 +138,43 @@ Saat database diinisialisasi (`seed.py`), sistem menyediakan 4 akun bawaan denga
 
 ## Panduan Penggunaan Antarmuka CLI (Terminal)
 
+Gunakan wrapper `./docseal` (atau `python3 -m src.cli.main_cli` di Windows). Flag `-p` otomatis menggunakan `<user>123` bila tidak diisi, dan `-n` / `-o` otomatis mengikuti nama berkas:
+
 ```bash
 # 1. Buat berkas PDF Dummy kustom langsung dari CLI
-python3 -m src.cli.main_cli make-dummy -n "Berkas_Jamaah_Tabanan" -i "Nama: I Made Simulasi\nPorsi: 5100099901"
+./docseal make-dummy -n "Berkas_Jamaah_Tabanan" -i "Nama: I Made Simulasi\nPorsi: 5100099901"
 
 # 2. Unggah dokumen asli oleh Operator (v1)
-python3 -m src.cli.main_cli upload -u operator -p operator123 -f data/dummy_docs/Berkas_Jamaah_01.pdf -n "Berkas_Jamaah_01"
+./docseal upload -u operator -f data/dummy_docs/Berkas_Jamaah_01.pdf
 
 # 3. Uji unggah duplikat identik (Otomatis ditolak oleh sistem)
-python3 -m src.cli.main_cli upload -u operator -p operator123 -f data/dummy_docs/Berkas_Jamaah_01_Copy.pdf -n "Berkas_Jamaah_01"
+./docseal upload -u operator -f data/dummy_docs/Berkas_Jamaah_01_Copy.pdf
 
 # 4. Uji unggah dokumen revisi (Otomatis naik versi menjadi v2)
-python3 -m src.cli.main_cli upload -u operator -p operator123 -f data/dummy_docs/Berkas_Jamaah_01_Revisi.pdf -n "Berkas_Jamaah_01"
+./docseal upload -u operator -f data/dummy_docs/Berkas_Jamaah_01_Revisi.pdf
 
 # 5. Lihat daftar dokumen yang terdaftar di database
-python3 -m src.cli.main_cli list
+./docseal list
 
 # 6. Verifikasi integritas dokumen & sekaligus cetak Berita Acara Verifikasi resmi (--cert)
-python3 -m src.cli.main_cli verify -u staf -p staf123 -i 1 -f data/dummy_docs/Berkas_Jamaah_01.pdf --cert
+./docseal verify -u staf -i 1 -f data/dummy_docs/Berkas_Jamaah_01.pdf --cert
 
 # 7. Pindai keutuhan seluruh arsip dokumen sekaligus (Batch Integrity Scan)
-python3 -m src.cli.main_cli scan -u staf -p staf123
+./docseal scan -u staf
 
 # 8. Enkripsi dokumen ke format .seal (AES-256-GCM) & Dekripsi kembali ke PDF
-python3 -m src.cli.main_cli encrypt -u operator -p operator123 -i 1 -k "rahasiahaji"
-python3 -m src.cli.main_cli decrypt -u operator -p operator123 -i 1 -f data/encrypted/Berkas_Jamaah_01_v1.seal -o data/dummy_docs/Hasil_Dekripsi.pdf -k "rahasiahaji"
+./docseal encrypt -u operator -i 1 -k "rahasiahaji"
+./docseal decrypt -u operator -i 1 -f data/encrypted/Berkas_Jamaah_01_v1.seal -k "rahasiahaji"
 
 # 9. Kelola akun pengguna RBAC & Ganti Password Mandiri
-python3 -m src.cli.main_cli users -u admin -p admin123
-python3 -m src.cli.main_cli add-user -u admin -p admin123 --new-user staf_tabanan --new-pass staf1234 --role staf
-python3 -m src.cli.main_cli change-password -u staf_tabanan -p staf1234 --new-pass staf_baru_2026
+./docseal users -u admin
+./docseal add-user -u admin -n staf_tabanan -w staf1234 -r staf
+./docseal change-password -u staf_tabanan -p staf1234 -w staf_baru_2026
 
 # 10. Ekspor laporan Audit Trail (.CSV) & Backup Sistem Lengkap (.ZIP)
-python3 -m src.cli.main_cli logs -u auditor -p auditor123
-python3 -m src.cli.main_cli export-logs -u auditor -p auditor123 -o data/DocSeal_Audit_Trail.csv
-python3 -m src.cli.main_cli backup -u admin -p admin123 -o data/DocSeal_System_Backup.zip
+./docseal logs -u auditor
+./docseal export-logs -u auditor
+./docseal backup -u admin
 ```
 
 ---
